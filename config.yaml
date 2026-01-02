@@ -1,2 +1,3 @@
 stream-url: "https://stream.wikimedia.org/v2/stream/recentchange"
 db-name: "wikipedia-data.db"
+db-table-name: "wiki_updates"
