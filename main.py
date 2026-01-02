@@ -14,7 +14,6 @@ def pipeline(config, db_connection):
     except KeyboardInterrupt:
         print('Stop signal received')
     finally:
-        # This is the most important part
         db_connection.commit()
         db_connection.close()
         print("Database connection closed.")
@@ -39,7 +38,12 @@ def save_message_to_db(connection, table_name, data):
     """
     cursor = connection.cursor()
     sql = f'INSERT INTO {table_name} (message) VALUES (?)'
-    cursor.execute(sql, (data,)) # Data must be in a tuple, even if it's just one value
+    try:
+        cursor.execute(sql, (data,)) # Data must be in a tuple, even if it's just one value
+    except sqlite3.Error as e:
+        print(f'SQLite3 Error: {e}')
+    except Exception as e:
+        print(f'Unexpected Error: {e}')
 
 def database_init(db_name, db_table_name):
     """
