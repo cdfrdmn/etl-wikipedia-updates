@@ -27,6 +27,9 @@ def pipeline(db_connection, db_table_name, stream_url, user_agent) -> None:
         for message in stream:
             save_message_to_db(db_connection, db_table_name, str(message))
             rows_added+=1
+            # Commit database changes in batches
+            if rows_added % 250 == 0:
+                db_connection.commit()
     except KeyboardInterrupt:
         pass
 
