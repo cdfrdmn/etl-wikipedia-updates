@@ -1,4 +1,4 @@
 stream-url: "https://stream.wikimedia.org/v2/stream/recentchange"
 db-name: "wikipedia-events.db"
 db-table-name: "wiki_events"
-batch-size: "200"
+batch-size: "50"

@@ -20,10 +20,18 @@ def pipeline(db_connection, db_table_name, stream_url, user_agent, batch_size) -
     # Instantiate the iterator
     event_feed = sse_stream_iterator(stream_url, user_agent)
 
+    rows_added_to_db = 0
+
     # Iterate over each yielded message
     try:
         for event in event_feed:
-            save_event_to_db(db_connection, db_table_name, batch_size, event)
+            save_event_to_db(db_connection, db_table_name, event)
+            rows_added_to_db+=1
+
+            # Limit database calls by batch committing
+            if rows_added_to_db % batch_size == 0:
+                db_connection.commit()
+                print(f"Batch committed: {rows_added_to_db} total rows.")
     except KeyboardInterrupt:
         pass
 
@@ -55,22 +63,20 @@ def sse_stream_iterator(url, user_agent):
             except (json.JSONDecodeError, KeyError) as e:
                 # Catch both broken JSON AND missing 'type' keys
                 print(f"Skipping event: {type(e).__name__}")
+                continue
 
-def save_event_to_db(db_connection, db_table_name, batch_size, event) -> None:
+def save_event_to_db(db_connection, db_table_name, event) -> None:
     """Insert a new record into the specified database table.
 
     Args:
         db_connection (sqlite3.Connection): An active SQLite3 database connection object.
         db_table_name (str): Name of the target database table.
-        batch_size (int): The number of rows to be added to the database before committing changes.
         event (dict): The event data.
 
     Returns:
         None
     """
     cursor = db_connection.cursor()
-    # Count number of rows added to the database for logging/information purposes
-    rows_added = 0
 
     # Convert event dict to string for the database
     raw_json = json.dumps(event)
@@ -80,18 +86,11 @@ def save_event_to_db(db_connection, db_table_name, batch_size, event) -> None:
 
     try:
         cursor.execute(sql, (raw_json, event_timestamp)) # Data must be in a tuple, even if it's just one value
-        rows_added+=1
-        # Reduce frequency of database calls by committing db changes in batches 
-        if rows_added % batch_size == 0:
-            db_connection.commit()
-            print(rows_added)
 
     except sqlite3.Error as e:
         print(f'SQLite3 Error: {e}')
     except Exception as e:
         print(f'Unexpected Error: {e}')
-    
-    return rows_added
 
 def database_init(db_name, db_table_name):
     """Initialise an SQLite3 database and return the database connection object.
@@ -112,6 +111,9 @@ def database_init(db_name, db_table_name):
 
     # Create a database file if it doesn't exist and connect to it
     connection = sqlite3.connect(db_name)
+    # Configure the database to enable Write-Ahead Logging (allows multiple readers and
+    #   one writer to work simultaneously)
+    connection.execute('PRAGMA journal_mode=WAL;')
     print('Database connection established.')
     # The cursor object is python's interface to the databse manager (SQLite)
     cursor = connection.cursor()
