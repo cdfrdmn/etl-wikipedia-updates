@@ -25,8 +25,8 @@ def pipeline(db_connection, db_table_name, stream_url, user_agent, batch_size) -
 
     # Iterate over each yielded message
     try:
-        for message in stream:
-            save_message_to_db(db_connection, db_table_name, str(message))
+        for raw_json_message in stream:
+            save_message_to_db(db_connection, db_table_name, str(raw_json_message))
             rows_added+=1
             # Commit changes to database in batches
             if rows_added % batch_size == 0:
@@ -47,8 +47,8 @@ def sse_stream_iterator(url, user_agent):
         str: The raw 'data' string from each event of type 'message'.
     """
 
+    # Request the stream with the required headers
     request_headers = {'User-Agent': user_agent}
-    # Instantiate the stream iterator
     messages = SSEClient(url, headers=request_headers)
 
     # Iterate over each yielded event
@@ -69,12 +69,13 @@ def save_message_to_db(db_connection, db_table_name, data) -> None:
     Returns:
         None
     """
+    raw_json = data
 
     cursor = db_connection.cursor()
-    sql = f'INSERT INTO {db_table_name} (message) VALUES (?)'
+    sql = f'INSERT INTO {db_table_name} (raw_json) VALUES (?)'
 
     try:
-        cursor.execute(sql, (data,)) # Data must be in a tuple, even if it's just one value
+        cursor.execute(sql, (raw_json,)) # Data must be in a tuple, even if it's just one value
     except sqlite3.Error as e:
         print(f'SQLite3 Error: {e}')
     except Exception as e:
@@ -104,7 +105,7 @@ def database_init(db_name, db_table_name):
     cursor = connection.cursor()
 
     # Define the database schema
-    sql = f'CREATE TABLE IF NOT EXISTS {db_table_name} (id INTEGER PRIMARY KEY AUTOINCREMENT, message TEXT)'
+    sql = f'''CREATE TABLE IF NOT EXISTS {db_table_name} (id INTEGER PRIMARY KEY AUTOINCREMENT, raw_json TEXT)'''
     # Create the new table and commit the change
     cursor.execute(sql)
     connection.commit()
