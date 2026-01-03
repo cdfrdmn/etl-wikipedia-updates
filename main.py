@@ -13,15 +13,24 @@ def pipeline(db_connection, db_table_name, stream_url, user_agent) -> None:
         user_agent (str): Identity string for the stream request header.
 
     Returns:
-        None
+        int: Number of rows added to the database table since execution start.
     """
 
     # Instantiate the iterator
     stream = sse_stream_iterator(stream_url, user_agent)
 
-    # Iterate over each yielded message from the iterator
-    for message in stream:
-        save_message_to_db(db_connection, db_table_name, str(message))
+    # Count number of rows added to the database for logging/information purposes
+    rows_added = 0
+
+    # Iterate over each yielded message
+    try:
+        for message in stream:
+            save_message_to_db(db_connection, db_table_name, str(message))
+            rows_added+=1
+    except KeyboardInterrupt:
+        pass
+
+    return rows_added
 
 def sse_stream_iterator(url, user_agent):
     """Establish a connection to a HTTP SSE stream server and generate (yield) incoming messages one-by-one. 
@@ -38,9 +47,12 @@ def sse_stream_iterator(url, user_agent):
     # Instantiate the stream iterator
     messages = SSEClient(url, headers=request_headers)
 
+    # Iterate over each yielded event
     for message in messages:
-        if message.event == 'message' and message.data: # filter events to type 'message' which contain 'data'
-            yield(message.data) # yield the data string of the oldest event in the stream buffer
+        # Filter events to type 'message' which contain 'data'
+        if message.event == 'message' and message.data:
+            # Yield the data string of the oldest event in the stream buffer
+            yield(message.data)
 
 def save_message_to_db(db_connection, db_table_name, data) -> None:
     """Insert a new record into the specified database table.
@@ -141,7 +153,7 @@ def main():
     db_connection = database_init(config['db-name'], config['db-table-name'])
 
     try:
-        pipeline(
+        rows_added = pipeline(
             db_connection,
             db_table_name=config['db-table-name'],
             stream_url=config['stream-url'],
@@ -154,6 +166,7 @@ def main():
         db_connection.commit()
         db_connection.close()
         print("\nDatabase connection closed.")
+        print(f'\nRows added: {rows_added}')
 
 if __name__ == "__main__":
     main()
