@@ -3,7 +3,7 @@ from sseclient import SSEClient
 import yaml
 import sqlite3
 
-def pipeline(db_connection, db_table_name, stream_url, user_agent) -> None:
+def pipeline(db_connection, db_table_name, stream_url, user_agent, batch_size) -> None:
     """Orchestrate the end-end pipeline for real-time SSE message ingestion into an SQLite database. 
 
     Args:
@@ -11,6 +11,7 @@ def pipeline(db_connection, db_table_name, stream_url, user_agent) -> None:
         db_table_name (str): Name of the target database table.
         stream_url (str): SSE endpoint URL.
         user_agent (str): Identity string for the stream request header.
+        batch_size (int): The number of rows to be added to the database before committing changes.
 
     Returns:
         int: Number of rows added to the database table since execution start.
@@ -27,8 +28,8 @@ def pipeline(db_connection, db_table_name, stream_url, user_agent) -> None:
         for message in stream:
             save_message_to_db(db_connection, db_table_name, str(message))
             rows_added+=1
-            # Commit database changes in batches
-            if rows_added % 250 == 0:
+            # Commit changes to database in batches
+            if rows_added % batch_size == 0:
                 db_connection.commit()
     except KeyboardInterrupt:
         pass
@@ -141,7 +142,8 @@ def load_config(config_path='config.yaml') -> dict:
         # Structural: from YAML
         'stream-url': config.get('stream-url'),
         'db-name': config.get('db-name'),
-        'db-table-name': config.get('db-table-name')
+        'db-table-name': config.get('db-table-name'),
+        'batch-size': config.get('batch-size')
     }
     
     return config_dict
@@ -160,7 +162,8 @@ def main():
             db_connection,
             db_table_name=config['db-table-name'],
             stream_url=config['stream-url'],
-            user_agent=config['user-agent']
+            user_agent=config['user-agent'],
+            batch_size=int(config['batch-size'])
         )
     except KeyboardInterrupt:
         pass
