@@ -3,26 +3,25 @@ from sseclient import SSEClient
 import yaml
 import sqlite3
 
-def pipeline(db_connection, config) -> None:
+def pipeline(db_connection, db_table_name, stream_url, user_agent) -> None:
     """Orchestrate the end-end pipeline for real-time SSE message ingestion into an SQLite database. 
 
     Args:
-        config (dict): Configuration dictionary containing:
-            - 'stream-url' (str): The SSE endpoint URL.
-            - 'user-agent' (str): The identity string for the stream request header.
-            - 'db-table-name' (str): The name of the target database table.
         db_connection (sqlite3.Connection): An active SQLite3 database connection object.
+        db_table_name (str): Name of the target database table.
+        stream_url (str): SSE endpoint URL.
+        user_agent (str): Identity string for the stream request header.
 
     Returns:
         None
     """
 
     # Instantiate the iterator
-    stream = sse_stream_iterator(config['stream-url'], config['user-agent'])
+    stream = sse_stream_iterator(stream_url, user_agent)
 
     # Iterate over each yielded message from the iterator
     for message in stream:
-        save_message_to_db(db_connection, config['db-table-name'], str(message))
+        save_message_to_db(db_connection, db_table_name, str(message))
 
 def sse_stream_iterator(url, user_agent):
     """Establish a connection to a HTTP SSE stream server and generate (yield) incoming messages one-by-one. 
@@ -142,7 +141,12 @@ def main():
     db_connection = database_init(config['db-name'], config['db-table-name'])
 
     try:
-        pipeline(db_connection, config)
+        pipeline(
+            db_connection,
+            db_table_name=config['db-table-name'],
+            stream_url=config['stream-url'],
+            user_agent=config['user-agent']
+        )
     except KeyboardInterrupt:
         pass
     finally:
