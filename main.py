@@ -2,6 +2,7 @@ import os
 from sseclient import SSEClient
 import yaml
 from dotenv import load_dotenv
+import sqlite3
 
 def sse_stream_iterator(url, user_agent):
     """
@@ -33,13 +34,36 @@ def load_config(config_path='config.yaml'):
     # Combine into a single Python object
     config_dict = {
         'user-agent': os.getenv('ETL_USER_AGENT'),
-        'stream-url': config.get('stream-url')
+        'stream-url': config.get('stream-url'),
+        'db-name': config.get('db-name')
     }
     
     return config_dict
 
+def database_init(db_name):
+    """
+    Initialise the SQLite database and returns the live connection.
+    """
+    # Create a database file if it doesn't exist and connect to it
+    connection = sqlite3.connect(db_name)
+    # Create a cursor object (the interface between Python and the databse manager (SQLite)
+    cursor = connection.cursor()
+
+    # Define the database schema
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS wiki_updates (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp INTEGER
+        )
+    ''')
+    # Commit the changes to the database
+    connection.commit()
+
+    return connection
+
 def main():
     config = load_config()
+    connection = database_init(config['db-name'])
     sse_stream_iterator(config['stream-url'], config['user-agent'])
 
 if __name__ == "__main__":
