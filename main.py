@@ -4,22 +4,64 @@ import yaml
 from dotenv import load_dotenv
 import sqlite3
 
+def pipeline(config, db_connection):
+
+    stream = sse_stream_iterator(config['stream-url'], config['user-agent'])
+
+    try:
+        for message in stream:
+            save_message_to_db(db_connection, config['db-table-name'], str(message))
+    except KeyboardInterrupt:
+        print('Stop signal received')
+    finally:
+        # This is the most important part
+        db_connection.commit()
+        db_connection.close()
+        print("Database connection closed.")
+
 def sse_stream_iterator(url, user_agent):
     """
-    Connect to an HTTP SSE stream server and iterate over received messages.
+    Connects to an HTTP SSE stream server and generates stream messages.
 
     :param url: The URL of the desired SSE stream source.
-    :param url: The identifier of the application requesting the stream data (the default python user agent is usually blocked by a 403).
+    :param user_agent: The identifier of the application requesting the stream (the default python user agent is usually blocked by a 403).
     """
     request_headers = {'User-Agent': user_agent}
-    messages = SSEClient(url, headers=request_headers)
+    messages = SSEClient(url, headers=request_headers) # This iterable provides access to received stream messages
 
     for message in messages:
-        print(message)
+        if message.event == 'message' and message.data: # filter events to type 'message' which contain 'data'
+            yield(message.data) # return the oldest event in the stream buffer
+
+def save_message_to_db(connection, table_name, data):
+    """
+    Accept a database connection object, a message string, and write the data to a new row in the database.
+    """
+    cursor = connection.cursor()
+    sql = f'INSERT INTO {table_name} (message) VALUES (?)'
+    cursor.execute(sql, (data,)) # Data must be in a tuple, even if it's just one value
+
+def database_init(db_name, db_table_name):
+    """
+    Initialise an SQLite database and return the live connection object.
+    """
+    # Create a database file if it doesn't exist and connect to it
+    connection = sqlite3.connect(db_name)
+    print('Database connection established.')
+    # Create a cursor object (the interface between Python and the databse manager (SQLite)
+    cursor = connection.cursor()
+    # Define the database schema
+    sql = f'CREATE TABLE IF NOT EXISTS {db_table_name} (id INTEGER PRIMARY KEY AUTOINCREMENT, message STRING)'
+    cursor.execute(sql)
+    # Commit the new table
+    connection.commit()
+
+    return connection
 
 def load_config(config_path='config.yaml'):
     """
-    Load static config from YAML and dynamic config from environment.
+    Load static configuration parameters from a YAML file and
+    dynamic configuration parameters from the environment.
     """
     # Load environment variables from local .env file if available
     load_dotenv()
@@ -35,36 +77,16 @@ def load_config(config_path='config.yaml'):
     config_dict = {
         'user-agent': os.getenv('ETL_USER_AGENT'),
         'stream-url': config.get('stream-url'),
-        'db-name': config.get('db-name')
+        'db-name': config.get('db-name'),
+        'db-table-name': config.get('db-table-name')
     }
     
     return config_dict
 
-def database_init(db_name):
-    """
-    Initialise the SQLite database and returns the live connection.
-    """
-    # Create a database file if it doesn't exist and connect to it
-    connection = sqlite3.connect(db_name)
-    # Create a cursor object (the interface between Python and the databse manager (SQLite)
-    cursor = connection.cursor()
-
-    # Define the database schema
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS wiki_updates (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            timestamp INTEGER
-        )
-    ''')
-    # Commit the changes to the database
-    connection.commit()
-
-    return connection
-
 def main():
     config = load_config()
-    connection = database_init(config['db-name'])
-    sse_stream_iterator(config['stream-url'], config['user-agent'])
+    db_connection = database_init(config['db-name'], config['db-table-name'])
+    pipeline(config, db_connection)
 
 if __name__ == "__main__":
     main()
