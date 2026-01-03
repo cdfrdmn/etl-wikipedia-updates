@@ -1,43 +1,63 @@
 import os
 from sseclient import SSEClient
 import yaml
-from dotenv import load_dotenv
 import sqlite3
 
-def pipeline(config, db_connection):
+def pipeline(db_connection, config) -> None:
+    """Orchestrate the end-end pipeline for real-time SSE message ingestion into an SQLite database. 
 
+    Args:
+        config (dict): Configuration dictionary containing:
+            - 'stream-url' (str): The SSE endpoint URL.
+            - 'user-agent' (str): The identity string for the stream request header.
+            - 'db-table-name' (str): The name of the target database table.
+        db_connection (sqlite3.Connection): An active SQLite3 database connection object.
+
+    Returns:
+        None
+    """
+
+    # Instantiate the iterator
     stream = sse_stream_iterator(config['stream-url'], config['user-agent'])
 
-    try:
-        for message in stream:
-            save_message_to_db(db_connection, config['db-table-name'], str(message))
-    except KeyboardInterrupt:
-        print('Stop signal received')
-    finally:
-        db_connection.commit()
-        db_connection.close()
-        print("Database connection closed.")
+    # Iterate over each yielded message from the iterator
+    for message in stream:
+        save_message_to_db(db_connection, config['db-table-name'], str(message))
 
 def sse_stream_iterator(url, user_agent):
-    """
-    Connects to an HTTP SSE stream server and generates stream messages.
+    """Establish a connection to a HTTP SSE stream server and generate (yield) incoming messages one-by-one. 
 
-    :param url: The URL of the desired SSE stream source.
-    :param user_agent: The identifier of the application requesting the stream (the default python user agent is usually blocked by a 403).
+    Args:
+        url (str): The SSE endpoint URL.
+        user_agent (str): The identity string for the stream request header.
+    
+    Yields:
+        str: The raw 'data' string from each event of type 'message'.
     """
+
     request_headers = {'User-Agent': user_agent}
-    messages = SSEClient(url, headers=request_headers) # This iterable provides access to received stream messages
+    # Instantiate the stream iterator
+    messages = SSEClient(url, headers=request_headers)
 
     for message in messages:
         if message.event == 'message' and message.data: # filter events to type 'message' which contain 'data'
-            yield(message.data) # return the oldest event in the stream buffer
+            yield(message.data) # yield the data string of the oldest event in the stream buffer
 
-def save_message_to_db(connection, table_name, data):
+def save_message_to_db(db_connection, db_table_name, data) -> None:
+    """Insert a new record into the specified database table.
+
+    Args:
+        db_connection (sqlite3.Connection): An active SQLite3 database connection object.
+        db_table_name (str): The name of the target database table.
+        data (Any): The payload data.
+
+    Returns:
+        None
     """
-    Accept a database connection object, a message string, and write the data to a new row in the database.
-    """
-    cursor = connection.cursor()
-    sql = f'INSERT INTO {table_name} (message) VALUES (?)'
+
+    cursor = db_connection.cursor()
+    sql = f'INSERT INTO {db_table_name} (message) VALUES (?)'
+
     try:
         cursor.execute(sql, (data,)) # Data must be in a tuple, even if it's just one value
     except sqlite3.Error as e:
@@ -46,40 +66,65 @@ def save_message_to_db(connection, table_name, data):
         print(f'Unexpected Error: {e}')
 
 def database_init(db_name, db_table_name):
+    """Initialise an SQLite3 database and return the database connection object.
+
+    If the database file doesn't exist, create it. If a table with the configured
+    name doesn't exist, create it.
+
+    Args:
+        db_name (str): The name of the target database file (e.g. 'data.db').
+        db_table_name (str): The name of the target database table.
+
+    Returns:
+        sqlite3.Connection: An active SQLite3 database connection object.
+
+    Raises:
+        sqlite3.Error: If the database cannot be initialized or the table creation fails.
     """
-    Initialise an SQLite database and return the live connection object.
-    """
+
     # Create a database file if it doesn't exist and connect to it
     connection = sqlite3.connect(db_name)
     print('Database connection established.')
-    # Create a cursor object (the interface between Python and the databse manager (SQLite)
+    # The cursor object is python's interface to the databse manager (SQLite)
     cursor = connection.cursor()
+
     # Define the database schema
-    sql = f'CREATE TABLE IF NOT EXISTS {db_table_name} (id INTEGER PRIMARY KEY AUTOINCREMENT, message STRING)'
+    sql = f'CREATE TABLE IF NOT EXISTS {db_table_name} (id INTEGER PRIMARY KEY AUTOINCREMENT, message TEXT)'
+    # Create the new table and commit the change
     cursor.execute(sql)
-    # Commit the new table
     connection.commit()
 
     return connection
 
-def load_config(config_path='config.yaml'):
-    """
-    Load static configuration parameters from a YAML file and
-    dynamic configuration parameters from the environment.
-    """
-    # Load environment variables from local .env file if available
-    load_dotenv()
+def load_config(config_path='config.yaml') -> dict:
+    """Load the required pipeline configuration parameters.
 
-    # Load YAML config file
+    The dynamic configuration parameters come from a YAML file, while the
+    static configuration parameters come from environment variables.
+
+    Args:
+        config_path (str, optional): Path to the YAML configuration file. Defaults to 'config.yaml'.
+
+    Returns:
+        dict: Dictionary containing all configuration parameters.
+
+    Raises:
+        FileNotFoundError: If the YAML configuration file cannot be found.
+        yaml.YAMLError: If the YAML file contains invalid syntax.
+    """
+
+    # Load the dynamic config from file
     if not os.path.exists(config_path):
         raise FileNotFoundError(f"Config file not found: {config_path}")
-    
     with open(config_path, "r") as f:
         config = yaml.safe_load(f)
     
-    # Combine into a single Python object
+    # Combine all config parameters into a dict
     config_dict = {
+        # Sensitive: from environment variables
         'user-agent': os.getenv('ETL_USER_AGENT'),
+
+        # Structural: from YAML
         'stream-url': config.get('stream-url'),
         'db-name': config.get('db-name'),
         'db-table-name': config.get('db-table-name')
@@ -88,9 +133,23 @@ def load_config(config_path='config.yaml'):
     return config_dict
 
 def main():
+    """Execute the SSE ingestion.
+
+    Loads the environment configuration and manages the lifecycle of the 
+    database connection while the pipeline processes real-time messages.
+    """
     config = load_config()
     db_connection = database_init(config['db-name'], config['db-table-name'])
-    pipeline(config, db_connection)
+
+    try:
+        pipeline(db_connection, config)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        # Graceful database shutdown
+        db_connection.commit()
+        db_connection.close()
+        print("\nDatabase connection closed.")
 
 if __name__ == "__main__":
     main()
