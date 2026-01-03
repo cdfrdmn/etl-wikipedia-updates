@@ -2,6 +2,7 @@ import os
 from sseclient import SSEClient
 import yaml
 import sqlite3
+import json
 
 def pipeline(db_connection, db_table_name, stream_url, user_agent, batch_size) -> None:
     """Orchestrate the end-end pipeline for real-time SSE message ingestion into an SQLite database. 
@@ -16,25 +17,15 @@ def pipeline(db_connection, db_table_name, stream_url, user_agent, batch_size) -
     Returns:
         int: Number of rows added to the database table since execution start.
     """
-
     # Instantiate the iterator
-    stream = sse_stream_iterator(stream_url, user_agent)
-
-    # Count number of rows added to the database for logging/information purposes
-    rows_added = 0
+    event_feed = sse_stream_iterator(stream_url, user_agent)
 
     # Iterate over each yielded message
     try:
-        for raw_json_message in stream:
-            save_message_to_db(db_connection, db_table_name, str(raw_json_message))
-            rows_added+=1
-            # Commit changes to database in batches
-            if rows_added % batch_size == 0:
-                db_connection.commit()
+        for event in event_feed:
+            save_event_to_db(db_connection, db_table_name, batch_size, event)
     except KeyboardInterrupt:
         pass
-
-    return rows_added
 
 def sse_stream_iterator(url, user_agent):
     """Establish a connection to a HTTP SSE stream server and generate (yield) incoming messages one-by-one. 
@@ -44,42 +35,63 @@ def sse_stream_iterator(url, user_agent):
         user_agent (str): The identity string for the stream request header.
     
     Yields:
-        str: The raw 'data' string from each event of type 'message'.
+        dict: The parsed (JSON) event message.
     """
 
     # Request the stream with the required headers
     request_headers = {'User-Agent': user_agent}
-    messages = SSEClient(url, headers=request_headers)
+    raw_messages = SSEClient(url, headers=request_headers)
 
     # Iterate over each yielded event
-    for message in messages:
+    for raw_message in raw_messages:
         # Filter events to type 'message' which contain 'data'
-        if message.event == 'message' and message.data:
-            # Yield the data string of the oldest event in the stream buffer
-            yield(message.data)
+        if raw_message.event == 'message' and raw_message.data:
+            try:
+                # Filter the data which contains properties:type: 'edit' or 'new' and not 'log'
+                data = json.loads(raw_message.data)
+                if data['type'] == 'edit' or data['type'] == 'new':
+                    # Yield the data of the oldest filtered event in the stream buffer as a JSON dict
+                    yield(data)
+            except (json.JSONDecodeError, KeyError) as e:
+                # Catch both broken JSON AND missing 'type' keys
+                print(f"Skipping event: {type(e).__name__}")
 
-def save_message_to_db(db_connection, db_table_name, data) -> None:
+def save_event_to_db(db_connection, db_table_name, batch_size, event) -> None:
     """Insert a new record into the specified database table.
 
     Args:
         db_connection (sqlite3.Connection): An active SQLite3 database connection object.
-        db_table_name (str): The name of the target database table.
-        data (Any): The payload data.
+        db_table_name (str): Name of the target database table.
+        batch_size (int): The number of rows to be added to the database before committing changes.
+        event (dict): The event data.
 
     Returns:
         None
     """
-    raw_json = data
-
     cursor = db_connection.cursor()
-    sql = f'INSERT INTO {db_table_name} (raw_json) VALUES (?)'
+    # Count number of rows added to the database for logging/information purposes
+    rows_added = 0
+
+    # Convert event dict to string for the database
+    raw_json = json.dumps(event)
+    event_timestamp = event['meta']['dt'] # Already in ISO-8601 format
+
+    sql = f'INSERT INTO {db_table_name} (raw_json, event_timestamp) VALUES (?,?)'
 
     try:
-        cursor.execute(sql, (raw_json,)) # Data must be in a tuple, even if it's just one value
+        cursor.execute(sql, (raw_json, event_timestamp)) # Data must be in a tuple, even if it's just one value
+        rows_added+=1
+        # Reduce frequency of database calls by committing db changes in batches 
+        if rows_added % batch_size == 0:
+            db_connection.commit()
+            print(rows_added)
+
     except sqlite3.Error as e:
         print(f'SQLite3 Error: {e}')
     except Exception as e:
         print(f'Unexpected Error: {e}')
+    
+    return rows_added
 
 def database_init(db_name, db_table_name):
     """Initialise an SQLite3 database and return the database connection object.
@@ -105,7 +117,11 @@ def database_init(db_name, db_table_name):
     cursor = connection.cursor()
 
     # Define the database schema
-    sql = f'''CREATE TABLE IF NOT EXISTS {db_table_name} (id INTEGER PRIMARY KEY AUTOINCREMENT, raw_json TEXT)'''
+    sql = f'''CREATE TABLE IF NOT EXISTS {db_table_name} (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        raw_json TEXT,
+        event_timestamp DATETIME
+    )'''
     # Create the new table and commit the change
     cursor.execute(sql)
     connection.commit()
@@ -159,7 +175,7 @@ def main():
     db_connection = database_init(config['db-name'], config['db-table-name'])
 
     try:
-        rows_added = pipeline(
+        pipeline(
             db_connection,
             db_table_name=config['db-table-name'],
             stream_url=config['stream-url'],
@@ -173,7 +189,6 @@ def main():
         db_connection.commit()
         db_connection.close()
         print("\nDatabase connection closed.")
-        print(f'\nRows added: {rows_added}')
 
 if __name__ == "__main__":
     main()
