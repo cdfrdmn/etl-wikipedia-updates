@@ -1,3 +1,4 @@
+import os
 import streamlit as st
 import pandas as pd
 import sqlite3
@@ -5,10 +6,10 @@ import datetime
 import time
 
 def get_data():
-    conn = sqlite3.connect('wikipedia-events.db') # maybe import this connection from the main script after database initialisation?
+    conn = sqlite3.connect(os.getenv('DB_PATH'))
     
     # Use parse_dates so Pandas handles the ISO-8601 strings for us
-    df = pd.read_sql("SELECT event_timestamp FROM wiki_events", conn, parse_dates=['event_timestamp']) # import config stuff like in main script, maybe move the config import to its own script!
+    df = pd.read_sql(f"SELECT event_timestamp FROM {os.getenv('DB_TABLE_NAME')}", conn, parse_dates=['event_timestamp'])
     conn.close()
     return df
 
