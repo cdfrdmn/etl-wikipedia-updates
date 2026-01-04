@@ -45,10 +45,10 @@ def sse_stream_iterator(url, user_agent):
 
     # Request the stream with the required headers
     request_headers = {'User-Agent': user_agent}
-    raw_messages = SSEClient(url, headers=request_headers)
+    stream_events = SSEClient(url, headers=request_headers)
 
     # Iterate over each yielded event
-    for raw_message in raw_messages:
+    for raw_message in stream_events:
         # Filter events to type 'message' which contain 'data'
         if raw_message.event == 'message' and raw_message.data:
             try:
@@ -57,9 +57,13 @@ def sse_stream_iterator(url, user_agent):
                 if data['type'] == 'edit' or data['type'] == 'new':
                     # Yield the data of the oldest filtered event in the stream buffer as a JSON dict
                     yield(data)
-            # Catch both broken JSON AND missing 'type' keys
-            except (json.JSONDecodeError, KeyError) as e:
-                print(f"Skipping event: {type(e).__name__}")
+            # Catch malformed JSON
+            except json.JSONDecodeError as e:
+                print(f"Skipping event: {type(e).__name__}: {e}")
+                continue
+            # Catch missing dict keys (e.g. 'type')
+            except KeyError as e:
+                print(f"Skipping event: {type(e).__name__}: {e}")
                 continue
 
 def save_event_to_db(db_connection, db_table_name, event) -> None:
@@ -85,7 +89,7 @@ def save_event_to_db(db_connection, db_table_name, event) -> None:
         cursor.execute(sql, (raw_json, event_timestamp)) # Data must be in a tuple, even if it's just one value
         return True # Signal a successful save
     except sqlite3.Error as e:
-        print(f'Event not saved to database. SQLite3 Error: {e}')
+        print(f'Unable to save event to database: {type(e).__name__}: {e}')
         return False # Signal an unsuccessful/skipped save
 
 def database_init(db_name, db_table_name):
