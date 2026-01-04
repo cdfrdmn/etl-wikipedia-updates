@@ -14,21 +14,39 @@ def get_data():
     return df
 
 def main():
-    start_time = datetime.datetime.now()
     st.title('Live Wikipedia Edit Monitor')
 
-    # Placeholders
+    # 1. Initialize 'initial_max_id' only once
+    if 'initial_max_id' not in st.session_state:
+        conn = sqlite3.connect(os.getenv('DB_PATH'))
+        # Get the highest ID currently in the table
+        res = conn.execute(f"SELECT MAX(id) FROM {os.getenv('DB_TABLE_NAME')}").fetchone()
+        # If DB is empty, start at 0
+        st.session_state.initial_max_id = res[0] if res[0] is not None else 0
+        st.session_state.start_time = datetime.datetime.now().strftime("%H:%M:%S")
+        conn.close()
+
     metric_placeholder = st.empty()
 
     while True:
-        df = get_data()
+        conn = sqlite3.connect(os.getenv('DB_PATH'))
+        # Get current total count AND the new max ID
+        res = conn.execute(f"SELECT COUNT(*), MAX(id) FROM {os.getenv('DB_TABLE_NAME')}").fetchone()
+        conn.close()
         
-        if not df.empty:
-            # 1. Update the Metric (Real-time count)
-            total_edits = len(df)
-            metric_placeholder.metric(f'Total Edits Processed since {start_time}', total_edits)
+        current_count = res[0] if res[0] else 0
+        current_max_id = res[1] if res[1] else 0
         
-        time.sleep(1) # Re-run loop every second
+        # 2. Calculate added rows based on ID growth, not row count
+        added_since_start = max(0, current_max_id - st.session_state.initial_max_id)
+        
+        metric_placeholder.metric(
+            label=f"New Edits (Since page load {st.session_state.start_time})", 
+            value=f"{added_since_start:,}",
+            # delta=f"{current_count:,} currently in DB"
+        )
+        
+        time.sleep(1)
 
 if __name__ == "__main__":
     main()
