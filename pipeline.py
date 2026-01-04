@@ -24,13 +24,13 @@ def pipeline(db_connection, db_table_name, stream_url, user_agent, batch_size) -
 
     # Iterate over each yielded message
     for event in event_feed:
-        save_event_to_db(db_connection, db_table_name, event)
-        rows_added_to_db+=1
-
-        # Limit database calls by batch committing
-        if rows_added_to_db % batch_size == 0:
-            db_connection.commit()
-            print(f"Batch committed since execution start: {rows_added_to_db} total rows.")
+        # Call the save function and check if it was successful
+        if save_event_to_db(db_connection, db_table_name, event):
+            rows_added_to_db+=1
+            # Limit database calls by batch committing
+            if rows_added_to_db % batch_size == 0:
+                db_connection.commit()
+                print(f"Batch committed since execution start: {rows_added_to_db} total rows.")
 
 def sse_stream_iterator(url, user_agent):
     """Establish a connection to a HTTP SSE stream server and generate (yield) incoming messages one-by-one. 
@@ -83,9 +83,10 @@ def save_event_to_db(db_connection, db_table_name, event) -> None:
 
     try:
         cursor.execute(sql, (raw_json, event_timestamp)) # Data must be in a tuple, even if it's just one value
-
+        return True # Signal a successful save
     except sqlite3.Error as e:
         print(f'Event not saved to database. SQLite3 Error: {e}')
+        return False # Signal an unsuccessful/skipped save
 
 def database_init(db_name, db_table_name):
     """Initialise an SQLite3 database and return the database connection object.
@@ -186,7 +187,7 @@ def main():
         if db_connection:
             db_connection.commit()
             db_connection.close()
-            print("\nDatabase connection closed.")
+            print("Database connection closed.")
 
 if __name__ == "__main__":
     main()
