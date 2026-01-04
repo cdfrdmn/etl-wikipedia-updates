@@ -92,7 +92,7 @@ def save_event_to_db(db_connection, db_table_name, event) -> None:
         print(f'Unable to save event to database: {type(e).__name__}: {e}')
         return False # Signal an unsuccessful/skipped save
 
-def database_init(db_name, db_table_name):
+def database_init(db_name, db_table_name, db_max_rows):
     """Initialise an SQLite3 database and return the database connection object.
 
     If the database file doesn't exist, create it. If a table with the configured
@@ -101,6 +101,7 @@ def database_init(db_name, db_table_name):
     Args:
         db_name (str): The name of the target database file (e.g. 'data.db').
         db_table_name (str): The name of the target database table.
+        db_max_rows (int): Maximum number of rows the database shall store in a rolling fashion.
 
     Returns:
         sqlite3.Connection: An active SQLite3 database connection object.
@@ -114,18 +115,31 @@ def database_init(db_name, db_table_name):
     # Configure the database to enable Write-Ahead Logging (allows multiple readers and
     #   one writer to work simultaneously)
     connection.execute('PRAGMA journal_mode=WAL;')
-    print('Database connection established.')
     # The cursor object is python's interface to the databse manager (SQLite)
     cursor = connection.cursor()
+    print('Database connection established.')
 
-    # Define the database schema
-    sql = f'''CREATE TABLE IF NOT EXISTS {db_table_name} (
+    # Create a table
+    cursor.execute(f'''CREATE TABLE IF NOT EXISTS {db_table_name} (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         raw_json TEXT,
         event_timestamp DATETIME
-    )'''
-    # Create the new table and commit the change
-    cursor.execute(sql)
+    )''')
+
+    # Add the "Rolling" Trigger which fires automatically after every INSERT.
+    # It deletes any record older than the 'db_max_rows' newest records.
+    cursor.execute(f'''
+    CREATE TRIGGER IF NOT EXISTS rolling_limit_{db_table_name}
+    AFTER INSERT ON {db_table_name}
+    BEGIN
+        DELETE FROM {db_table_name}
+        WHERE id <= (
+            SELECT id FROM {db_table_name}
+            ORDER BY id DESC
+            LIMIT 1 OFFSET {db_max_rows}
+        );
+    END;
+    ''')
     connection.commit()
 
     return connection
@@ -159,6 +173,7 @@ def load_config(config_path='config.yaml') -> dict:
         'user-agent': os.getenv('ETL_USER_AGENT'),
         'db-path': os.getenv('DB_PATH', 'data/wikipedia-events.db'),
         'db-table-name': os.getenv('DB_TABLE_NAME'),
+        'db-max-rows': int(os.getenv('DB_MAX_ROWS')),
 
         # Structural: from YAML
         'stream-url': config.get('stream-url'),
@@ -174,7 +189,7 @@ def main():
     database connection while the pipeline processes real-time messages.
     """
     config = load_config()
-    db_connection = database_init(config['db-path'], config['db-table-name'])
+    db_connection = database_init(config['db-path'], config['db-table-name'], config['db-max-rows'])
 
     try:
         pipeline(
