@@ -23,17 +23,14 @@ def pipeline(db_connection, db_table_name, stream_url, user_agent, batch_size) -
     rows_added_to_db = 0
 
     # Iterate over each yielded message
-    try:
-        for event in event_feed:
-            save_event_to_db(db_connection, db_table_name, event)
-            rows_added_to_db+=1
+    for event in event_feed:
+        save_event_to_db(db_connection, db_table_name, event)
+        rows_added_to_db+=1
 
-            # Limit database calls by batch committing
-            if rows_added_to_db % batch_size == 0:
-                db_connection.commit()
-                print(f"Batch committed: {rows_added_to_db} total rows.")
-    except KeyboardInterrupt:
-        pass
+        # Limit database calls by batch committing
+        if rows_added_to_db % batch_size == 0:
+            db_connection.commit()
+            print(f"Batch committed since execution start: {rows_added_to_db} total rows.")
 
 def sse_stream_iterator(url, user_agent):
     """Establish a connection to a HTTP SSE stream server and generate (yield) incoming messages one-by-one. 
@@ -60,8 +57,8 @@ def sse_stream_iterator(url, user_agent):
                 if data['type'] == 'edit' or data['type'] == 'new':
                     # Yield the data of the oldest filtered event in the stream buffer as a JSON dict
                     yield(data)
+            # Catch both broken JSON AND missing 'type' keys
             except (json.JSONDecodeError, KeyError) as e:
-                # Catch both broken JSON AND missing 'type' keys
                 print(f"Skipping event: {type(e).__name__}")
                 continue
 
@@ -88,9 +85,7 @@ def save_event_to_db(db_connection, db_table_name, event) -> None:
         cursor.execute(sql, (raw_json, event_timestamp)) # Data must be in a tuple, even if it's just one value
 
     except sqlite3.Error as e:
-        print(f'SQLite3 Error: {e}')
-    except Exception as e:
-        print(f'Unexpected Error: {e}')
+        print(f'Event not saved to database. SQLite3 Error: {e}')
 
 def database_init(db_name, db_table_name):
     """Initialise an SQLite3 database and return the database connection object.
@@ -185,12 +180,13 @@ def main():
             batch_size=int(config['batch-size'])
         )
     except KeyboardInterrupt:
-        pass
+        print('\nReceived stop signal from user.')
     finally:
         # Graceful database shutdown
-        db_connection.commit()
-        db_connection.close()
-        print("\nDatabase connection closed.")
+        if db_connection:
+            db_connection.commit()
+            db_connection.close()
+            print("\nDatabase connection closed.")
 
 if __name__ == "__main__":
     main()
