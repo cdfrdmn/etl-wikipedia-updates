@@ -153,15 +153,15 @@ def load_config(config_path='config.yaml') -> dict:
     with open(config_path, "r") as f:
         config = yaml.safe_load(f)
     
-    # Combine all config parameters into a dict
+    # Combine all config parameters into one dict
     config_dict = {
         # Sensitive: from environment variables
         'user-agent': os.getenv('ETL_USER_AGENT'),
+        'db-path': os.getenv('DB_PATH', 'data/wikipedia-events.db'),
+        'db-table-name': os.getenv('DB_TABLE_NAME'),
 
         # Structural: from YAML
         'stream-url': config.get('stream-url'),
-        'db-name': config.get('db-name'),
-        'db-table-name': config.get('db-table-name'),
         'batch-size': config.get('batch-size')
     }
     
@@ -174,7 +174,7 @@ def main():
     database connection while the pipeline processes real-time messages.
     """
     config = load_config()
-    db_connection = database_init(config['db-name'], config['db-table-name'])
+    db_connection = database_init(config['db-path'], config['db-table-name'])
 
     try:
         pipeline(
