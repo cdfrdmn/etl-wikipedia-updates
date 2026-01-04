@@ -1,0 +1,21 @@
+services:
+  ingestor:
+    build: .
+    env_file: .env  # Load env variables (without copying the file)
+    environment:
+      - DB_PATH=/app/data/wikipedia-events.db  # Override the local dev path
+    volumes:
+      - ./data:/app/data
+    command: uv run pipeline.py
+
+  dashboard:
+    build: .
+    env_file: .env  # Load env variables (without copying the file)
+    environment:
+      - DB_PATH=/app/data/wikipedia-events.db  # Override the local dev path
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./data:/app/data
+    command: uv run streamlit run dashboard.py --server.address=0.0.0.0 # Listen to requests from all network interfaces including the host-guest bridge interface
+    restart: always
