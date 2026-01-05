@@ -4,7 +4,7 @@ import yaml
 import sqlite3
 import json
 
-def pipeline(db_connection, db_table_name, stream_url, user_agent, batch_size) -> None:
+def pipeline(db_connection: sqlite3.Connection, db_table_name: str, stream_url: str, user_agent: str, batch_size: int) -> None:
     """Orchestrate the end-end pipeline for real-time SSE message ingestion into an SQLite database. 
 
     Args:
@@ -32,7 +32,7 @@ def pipeline(db_connection, db_table_name, stream_url, user_agent, batch_size) -
                 db_connection.commit()
                 print(f"Batch committed since execution start: {rows_added_to_db} total rows.")
 
-def sse_stream_iterator(url, user_agent):
+def sse_stream_iterator(url: str, user_agent: str):
     """Establish a connection to a HTTP SSE stream server and generate (yield) incoming messages one-by-one. 
 
     Args:
@@ -56,7 +56,7 @@ def sse_stream_iterator(url, user_agent):
                 data = json.loads(raw_message.data)
                 if data['type'] == 'edit' or data['type'] == 'new':
                     # Yield the data of the oldest filtered event in the stream buffer as a JSON dict
-                    yield(data)
+                    yield(json.dumps(data))
             # Catch malformed JSON
             except json.JSONDecodeError as e:
                 print(f"Skipping event: {type(e).__name__}: {e}")
@@ -66,7 +66,7 @@ def sse_stream_iterator(url, user_agent):
                 print(f"Skipping event: {type(e).__name__}: {e}")
                 continue
 
-def save_event_to_db(db_connection, db_table_name, event) -> None:
+def save_event_to_db(db_connection: sqlite3.Connection, db_table_name: str, event: str) -> bool:
     """Insert a new record into the specified database table.
 
     Args:
@@ -80,19 +80,18 @@ def save_event_to_db(db_connection, db_table_name, event) -> None:
     cursor = db_connection.cursor()
 
     # Convert event dict to string for the database
-    raw_json = json.dumps(event)
-    event_timestamp = event['meta']['dt'] # Already in ISO-8601 format
+    event_timestamp = json.loads(event)['meta']['dt'] # Already in ISO-8601 format
 
     sql = f'INSERT INTO {db_table_name} (raw_json, event_timestamp) VALUES (?,?)'
 
     try:
-        cursor.execute(sql, (raw_json, event_timestamp)) # Data must be in a tuple, even if it's just one value
+        cursor.execute(sql, (event, event_timestamp)) # Data must be in a tuple, even if it's just one value
         return True # Signal a successful save
     except sqlite3.Error as e:
         print(f'Unable to save event to database: {type(e).__name__}: {e}')
         return False # Signal an unsuccessful/skipped save
 
-def database_init(db_name, db_table_name, db_max_rows):
+def database_init(db_name: str, db_table_name: str, db_max_rows: int):
     """Initialise an SQLite3 database and return the database connection object.
 
     If the database file doesn't exist, create it. If a table with the configured
@@ -144,7 +143,7 @@ def database_init(db_name, db_table_name, db_max_rows):
 
     return connection
 
-def load_config(config_path='config.yaml') -> dict:
+def load_config(config_path: str ='config.yaml') -> dict[str, str | int | None]:
     """Load the required pipeline configuration parameters.
 
     The dynamic configuration parameters come from a YAML file, while the
@@ -168,12 +167,12 @@ def load_config(config_path='config.yaml') -> dict:
         config = yaml.safe_load(f)
     
     # Combine all config parameters into one dict
-    config_dict = {
+    config_dict: dict[str, str | int | None] = {
         # Sensitive: from environment variables
         'user-agent': os.getenv('ETL_USER_AGENT'),
         'db-path': os.getenv('DB_PATH', 'data/wikipedia-events.db'),
         'db-table-name': os.getenv('DB_TABLE_NAME'),
-        'db-max-rows': int(os.getenv('DB_MAX_ROWS')),
+        'db-max-rows': os.getenv('DB_MAX_ROWS'),
 
         # Structural: from YAML
         'stream-url': config.get('stream-url'),
@@ -189,7 +188,7 @@ def main():
     database connection while the pipeline processes real-time messages.
     """
     config = load_config()
-    db_connection = database_init(config['db-path'], config['db-table-name'], config['db-max-rows'])
+    db_connection = database_init(config['db-path'], config['db-table-name'], int(config['db-max-rows']))
 
     try:
         pipeline(
