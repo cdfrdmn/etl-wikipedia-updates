@@ -1,8 +1,11 @@
-import os
+from pydantic import Field
+from pydantic_settings import BaseSettings
 from sseclient import SSEClient
 import yaml
 import sqlite3
 import json
+from pathlib import Path
+from pprint import pprint
 
 def pipeline(db_connection: sqlite3.Connection, db_table_name: str, stream_url: str, user_agent: str, batch_size: int) -> None:
     """Orchestrate the end-end pipeline for real-time SSE message ingestion into an SQLite database. 
@@ -143,43 +146,34 @@ def database_init(db_name: str, db_table_name: str, db_max_rows: int):
 
     return connection
 
-def load_config(config_path: str ='config.yaml') -> dict[str, str | int | None]:
-    """Load the required pipeline configuration parameters.
-
-    The dynamic configuration parameters come from a YAML file, while the
-    static configuration parameters come from environment variables.
-
-    Args:
-        config_path (str, optional): Path to the YAML configuration file. Defaults to 'config.yaml'.
-
-    Returns:
-        dict: Dictionary containing all configuration parameters.
-
-    Raises:
-        FileNotFoundError: If the YAML configuration file cannot be found.
-        yaml.YAMLError: If the YAML file contains invalid syntax.
-    """
-
-    # Load the dynamic config from file
-    if not os.path.exists(config_path):
-        raise FileNotFoundError(f"Config file not found: {config_path}")
-    with open(config_path, "r") as f:
-        config = yaml.safe_load(f)
+class Settings(BaseSettings):
+    # This app is dedicated to one URL, so hardcode the default
+    stream_url: str = "https://stream.wikimedia.org/v2/stream/recentchange"
     
-    # Combine all config parameters into one dict
-    config_dict: dict[str, str | int | None] = {
-        # Sensitive: from environment variables
-        'user-agent': os.getenv('ETL_USER_AGENT'),
-        'db-path': os.getenv('DB_PATH', 'data/wikipedia-events.db'),
-        'db-table-name': os.getenv('DB_TABLE_NAME'),
-        'db-max-rows': os.getenv('DB_MAX_ROWS'),
+    # Defaults to local DB path, overridden by DB_PATH in Docker
+    db_path: str = "data/wikipedia-events.db"
+    db_table_name: str = 'wiki_events'
 
-        # Structural: from YAML
-        'stream-url': config.get('stream-url'),
-        'batch-size': config.get('batch-size')
-    }
+    # User config:
+    user_agent: str = Field(default='WikiETL-Bot', alias='user-agent')
+    db_batch_size: int = Field(default=50, alias='db-batch-size')
+    db_max_events: int = Field(default=250000, alias='db-max-events')
+
+def load_user_config(config_path: Path | str = 'config.yaml') -> Settings:
+    path = Path(config_path)
     
-    return config_dict
+    # Check a user config yaml exists
+    if not path.is_file():
+        print(f'No config file found at {path.absolute()}. Using default settings.')
+    else:
+        with path.open('r') as f:
+            # Load the dict, ensuring we handle empty files with 'or {}'
+            yaml_data = yaml.safe_load(f) or {}
+    
+    settings = Settings(**yaml_data)
+    print('Configuration:'); pprint(settings.model_dump()); print('\n')
+    
+    return settings
 
 def main():
     """Execute the SSE ingestion.
@@ -187,16 +181,16 @@ def main():
     Loads the environment configuration and manages the lifecycle of the 
     database connection while the pipeline processes real-time messages.
     """
-    config = load_config()
-    db_connection = database_init(config['db-path'], config['db-table-name'], int(config['db-max-rows']))
+    config = load_user_config()
+    db_connection = database_init(config.db_path, config.db_table_name, config.db_max_events)
 
     try:
         pipeline(
             db_connection,
-            db_table_name=config['db-table-name'],
-            stream_url=config['stream-url'],
-            user_agent=config['user-agent'],
-            batch_size=int(config['batch-size'])
+            db_table_name=config.db_table_name,
+            stream_url=config.stream_url,
+            user_agent=config.user_agent,
+            batch_size=config.db_batch_size
         )
     except KeyboardInterrupt:
         print('\nReceived stop signal from user.')
