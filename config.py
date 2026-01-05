@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     db_max_events: int = Field(default=250000, alias='db-max-events')
 
 def load_user_config(config_path: Path | str = 'config.yaml') -> Settings:
+    yaml_data = {}
     path = Path(config_path)
     
     # Check a user config yaml exists
@@ -28,7 +29,7 @@ def load_user_config(config_path: Path | str = 'config.yaml') -> Settings:
     else:
         with path.open('r') as f:
             # Load the dict, ensuring we handle empty files with 'or {}'
-            yaml_data = yaml.safe_load(f) or {}
+            yaml_data = yaml.safe_load(f)
     
     settings = Settings(**yaml_data)
     print('Starting with configuration:'); pprint(settings.model_dump()); print('\n')
