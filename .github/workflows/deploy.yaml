@@ -1,4 +1,4 @@
-name: Deploy to prod
+name: Deploy to Prod
 
 on:
   push:
@@ -23,5 +23,6 @@ jobs:
             cd ~/repos/etl-wikipedia-updates
             git fetch --all
             git reset --hard origin/main
-            docker compose up -d --build
+            CLOUDFLARE_TUNNEL_TOKEN=${{ secrets.CLOUDFLAREF_TUNNEL_TOKEN }}
+            docker compose up --profile production --build -d
             docker image prune -f
