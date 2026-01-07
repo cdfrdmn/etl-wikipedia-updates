@@ -1,18 +1,16 @@
 services:
   ingestor:
     build: .
-    env_file: .env  # Load env variables (without copying the file)
     environment:
-      - DB_PATH=/app/data/wikipedia-events.db  # Override the local dev path
+      - DB_PATH=/app/data/wikipedia-events.db
     volumes:
       - ./data:/app/data
     command: uv run pipeline.py
 
   dashboard:
     build: .
-    env_file: .env  # Load env variables (without copying the file)
     environment:
-      - DB_PATH=/app/data/wikipedia-events.db  # Override the local dev path
+      - DB_PATH=/app/data/wikipedia-events.db
     ports:
       - "8501:8501"
     volumes:
