@@ -39,5 +39,5 @@ services:
       - production # Only create the tunnel when using docker compose argument `--profile production`
     restart: always
     environment:
-      - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN:-} # If variable is missing (i.e in local dev environment), use an empty string
+      - TUNNEL_TOKEN=${TUNNEL_TOKEN:-} # If variable is missing (i.e in local dev environment), use an empty string
     command: tunnel --no-autoupdate run
