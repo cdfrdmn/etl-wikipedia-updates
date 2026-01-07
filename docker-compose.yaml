@@ -26,6 +26,17 @@ services:
     image: cloudflare/cloudflared:latest
     profiles:
       - production # Only create the tunnel when using docker compose argument `--profile production`
+    # --server.address=0.0.0.0 = Listen to requests from all network interfaces including the host-guest bridge interface or cloudflare tunnel container
+    # --server-port=8501 = explicitly define the server port for clarity
+    # --server.enableCORS false = prevent streamlit blocking traffic from the cloudflare tunnel
+    # --server.enableXsrfProtection false = prevent connection error due to cloudflare tunnel stripping headers required for XRSF protection
+    command: uv run streamlit run dashboard.py --server.address=0.0.0.0 --server.port=8501 --server.enableCORS false --server.enableXsrfProtection false
+    restart: always
+
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    profiles:
+      - production # Only create the tunnel when using docker compose argument `--profile production`
     restart: always
     environment:
       - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN:-} # If variable is missing (i.e in local dev environment), use an empty string

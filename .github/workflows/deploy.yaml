@@ -19,10 +19,13 @@ jobs:
           host: ${{ secrets.HOST }}
           username: ${{ secrets.USERNAME }}
           key: ${{ secrets.SSH_KEY_PRIV }}
+          envs: TUNNEL_TOKEN
           script: |
             cd ~/repos/etl-wikipedia-updates
             git fetch --all
             git reset --hard origin/main
-            CLOUDFLARE_TUNNEL_TOKEN=${{ secrets.CLOUDFLAREF_TUNNEL_TOKEN }}
-            docker compose up --profile production --build -d
+            if [ -z "$TUNNEL_TOKEN" ]; then echo "TOKEN IS EMPTY"; else echo "TOKEN IS SET (Length: ${#TUNNEL_TOKEN})"; fi
+            docker compose --profile production up --build -d
             docker image prune -f
+        env:
+          TUNNEL_TOKEN: ${{ secrets.CLOUDFLARE_TUNNEL_TOKEN }}
