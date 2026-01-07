@@ -3,7 +3,7 @@ import sqlite3
 import json
 from config import load_user_config
 
-def pipeline(db_connection: sqlite3.Connection, db_table_name: str, stream_url: str, user_agent: str, batch_size: int) -> None:
+def pipeline(db_connection: sqlite3.Connection, db_table_name: str, stream_url: str, user_agent: str, batch_size: int, db_max_events: int) -> None:
     """Orchestrate the end-end pipeline for real-time SSE message ingestion into an SQLite database. 
 
     Args:
@@ -26,10 +26,18 @@ def pipeline(db_connection: sqlite3.Connection, db_table_name: str, stream_url: 
         # Call the save function and check if it was successful
         if save_event_to_db(db_connection, db_table_name, event):
             rows_added_to_db+=1
-            # Limit database calls by batch committing
+            # Limit database calls by batch committing and 
             if rows_added_to_db % batch_size == 0:
+                # Commit the new batch immediately
+                db_connection.commit() 
+            # Perform regular cleanup
+            if rows_added_to_db % 1000 == 0:
+                db_connection.execute(f'''
+                    DELETE FROM {db_table_name} 
+                    WHERE id < MAX(0, (SELECT MAX(id) FROM {db_table_name}) - {db_max_events})
+                ''')
                 db_connection.commit()
-                print(f"Batch committed since execution start: {rows_added_to_db} total rows.")
+                print("--- CLEANUP PERFORMED ---")
 
 def sse_stream_iterator(url: str, user_agent: str):
     """Establish a connection to a HTTP SSE stream server and generate (yield) incoming messages one-by-one. 
@@ -90,7 +98,7 @@ def save_event_to_db(db_connection: sqlite3.Connection, db_table_name: str, even
         print(f'Unable to save event to database: {type(e).__name__}: {e}')
         return False # Signal an unsuccessful/skipped save
 
-def database_init(db_name: str, db_table_name: str, db_max_rows: int):
+def database_init(db_name: str, db_table_name: str):
     """Initialise an SQLite3 database and return the database connection object.
 
     If the database file doesn't exist, create it. If a table with the configured
@@ -124,20 +132,6 @@ def database_init(db_name: str, db_table_name: str, db_max_rows: int):
         event_timestamp DATETIME
     )''')
 
-    # Add the "Rolling" Trigger which fires automatically after every INSERT.
-    # It deletes any record older than the 'db_max_rows' newest records.
-    cursor.execute(f'''
-    CREATE TRIGGER IF NOT EXISTS rolling_limit_{db_table_name}
-    AFTER INSERT ON {db_table_name}
-    BEGIN
-        DELETE FROM {db_table_name}
-        WHERE id <= (
-            SELECT id FROM {db_table_name}
-            ORDER BY id DESC
-            LIMIT 1 OFFSET {db_max_rows}
-        );
-    END;
-    ''')
     connection.commit()
 
     return connection
@@ -149,7 +143,7 @@ def main():
     database connection while the pipeline processes real-time messages.
     """
     config = load_user_config()
-    db_connection = database_init(config.db_path, config.db_table_name, config.db_max_events)
+    db_connection = database_init(config.db_path, config.db_table_name)
 
     try:
         pipeline(
@@ -157,7 +151,8 @@ def main():
             db_table_name=config.db_table_name,
             stream_url=config.stream_url,
             user_agent=config.user_agent,
-            batch_size=config.db_batch_size
+            batch_size=config.db_batch_size,
+            db_max_events=config.db_max_events
         )
     except KeyboardInterrupt:
         print('\nReceived stop signal from user.')
