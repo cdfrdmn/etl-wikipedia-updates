@@ -31,7 +31,8 @@ def load_user_config(config_path: Path | str = 'config.yaml') -> Settings:
             # Load the dict, ensuring we handle empty files with 'or {}'
             yaml_data = yaml.safe_load(f)
     
-    settings = Settings(**yaml_data)
+    # Convert the dict into our model
+    settings = Settings.model_validate(yaml_data)
     print('Starting with configuration:'); pprint(settings.model_dump()); print('\n')
     
     return settings
