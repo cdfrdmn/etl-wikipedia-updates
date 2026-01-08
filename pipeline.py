@@ -1,6 +1,7 @@
 from sseclient import SSEClient
 import sqlite3
 import json
+import time
 from config import load_user_config
 
 def pipeline(db_connection: sqlite3.Connection, db_table_name: str, stream_url: str, user_agent: str, batch_size: int, db_max_events: int) -> None:
@@ -20,25 +21,31 @@ def pipeline(db_connection: sqlite3.Connection, db_table_name: str, stream_url: 
     event_feed = sse_stream_iterator(stream_url, user_agent)
 
     rows_added_to_db = 0
+    last_commit_time = time.time()
+    commit_interval_seconds = 2
 
     # Iterate over each yielded message
     for event in event_feed:
         # Call the save function and check if it was successful
         if save_event_to_db(db_connection, db_table_name, event):
             rows_added_to_db+=1
-            # Limit database calls by batch committing and 
-            if rows_added_to_db % batch_size == 0:
-                # Commit the new batch immediately
-                print(f'Events added to database: {rows_added_to_db}')
-                db_connection.commit() 
-            # Perform regular cleanup
-            if rows_added_to_db % 1000 == 0:
-                db_connection.execute(f'''
-                    DELETE FROM {db_table_name} 
-                    WHERE id < MAX(0, (SELECT MAX(id) FROM {db_table_name}) - {db_max_events})
-                ''')
+
+            # Use a time-based commit schedule to limit database write calls
+            if time.time() - last_commit_time >= commit_interval_seconds:
                 db_connection.commit()
-                print("--- CLEANUP PERFORMED ---")
+                last_commit_time = time.time()
+                print(f'Events committed to database: {rows_added_to_db}')
+                current_row_count: int = db_connection.execute(f"SELECT COUNT(*) FROM {db_table_name}").fetchone()[0]
+
+                # Perform threshold based database cleanup, allowing a 10% buffer 
+                if current_row_count >= int(1.1*db_max_events):
+                    db_connection.execute(f'''
+                        DELETE FROM {db_table_name} 
+                        WHERE id < MAX(0, (SELECT MAX(id) FROM {db_table_name}) - {db_max_events})
+                    ''')
+                    db_connection.commit()
+                    current_row_count = db_max_events
+                    print("--- CLEANUP PERFORMED ---")
 
 def sse_stream_iterator(url: str, user_agent: str):
     """Establish a connection to a HTTP SSE stream server and generate (yield) incoming messages one-by-one. 
@@ -64,7 +71,7 @@ def sse_stream_iterator(url: str, user_agent: str):
                 data = json.loads(raw_message.data)
                 if data['type'] == 'edit' or data['type'] == 'new':
                     # Yield the data of the oldest filtered event in the stream buffer as a JSON dict
-                    yield(json.dumps(data))
+                    yield(data)
             # Catch malformed JSON
             except json.JSONDecodeError as e:
                 print(f"Skipping event: {type(e).__name__}: {e}")
@@ -74,7 +81,35 @@ def sse_stream_iterator(url: str, user_agent: str):
                 print(f"Skipping event: {type(e).__name__}: {e}")
                 continue
 
-def save_event_to_db(db_connection: sqlite3.Connection, db_table_name: str, event: str) -> bool:
+def transform_data(data: dict):
+
+    raw_dt              = str(data.get('meta', {}).get('dt'))
+    clean_dt            = str(raw_dt.replace('T', ' ').replace('Z', ''))
+    title_clean         = str(data.get('title'))
+    title_url_clean     = str(data.get('title_url'))
+    bot_clean           = int(data.get('bot'))
+    username_clean      = str(data.get('user'))
+
+    # Use .get() with a default of 0 to prevent KeyError
+    length_data = data.get('length', {})
+    length_old  = int(length_data.get('old', 0)) # Returns 0 if 'old' doesn't exist
+    length_new  = int(length_data.get('new', 0)) # Returns 0 if 'new' doesn't exist
+    length_diff_bytes   = int(length_old - length_new)
+
+    clean_data = {
+        'event_timestamp': clean_dt,
+        'title': title_clean,
+        'title_url': title_url_clean,
+        'bot': bot_clean,
+        'username': username_clean,
+        'length_bytes_old': length_old,
+        'length_bytes_new': length_new,
+        'length_diff_bytes': length_diff_bytes
+    }
+
+    return clean_data
+
+def save_event_to_db(db_connection: sqlite3.Connection, db_table_name: str, event: dict) -> bool:
     """Insert a new record into the specified database table.
 
     Args:
@@ -86,18 +121,8 @@ def save_event_to_db(db_connection: sqlite3.Connection, db_table_name: str, even
         None
     """
     cursor = db_connection.cursor()
-    data = json.loads(event)
 
-    # Convert event dict to string for the database
-    event_timestamp = data.get('meta', {}).get('dt')
-    title           = data.get('title')
-    title_url       = data.get('title_url')
-    bot             = data.get('bot')
-    username        = data.get('user')
-    # Use .get() with a default of 0 to prevent KeyError
-    length_data = data.get('length', {})
-    length_old  = length_data.get('old', 0) # Returns 0 if 'old' doesn't exist
-    length_new  = length_data.get('new', 0) # Returns 0 if 'new' doesn't exist
+    clean_data: dict = transform_data(event)
 
     sql = f'''INSERT INTO {db_table_name} (
         raw_json,
@@ -111,7 +136,14 @@ def save_event_to_db(db_connection: sqlite3.Connection, db_table_name: str, even
         ) VALUES (?,?,?,?,?,?,?,?)'''
 
     try:
-        cursor.execute(sql, (event, event_timestamp, title, title_url, bot, username, length_old, length_new)) # Data must be in a tuple, even if it's just one value
+        cursor.execute(sql, (json.dumps(event),
+                             clean_data.get('event_timestamp'),
+                             clean_data.get('title'),
+                             clean_data.get('title_url'),
+                             clean_data.get('bot'),
+                             clean_data.get('username'),
+                             clean_data.get('length_bytes_old'),
+                             clean_data.get('length_bytes_new'))) # Data must be in a tuple, even if it's just one value
         return True # Signal a successful save
     except sqlite3.Error as e:
         print(f'Unable to save event to database: {type(e).__name__}: {e}')
