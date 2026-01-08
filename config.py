@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     # User config:
     user_agent: str = Field(default='WikiETL-Bot', alias='user-agent')
     db_batch_size: int = Field(default=50, alias='db-batch-size')
-    db_max_events: int = Field(default=250000, alias='db-max-events')
+    db_max_events: int = Field(default=100000, alias='db-max-events')
 
 def load_user_config(config_path: Path | str = 'config.yaml') -> Settings:
     yaml_data = {}

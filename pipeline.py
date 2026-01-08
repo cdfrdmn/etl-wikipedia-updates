@@ -29,6 +29,7 @@ def pipeline(db_connection: sqlite3.Connection, db_table_name: str, stream_url: 
             # Limit database calls by batch committing and 
             if rows_added_to_db % batch_size == 0:
                 # Commit the new batch immediately
+                print(f'Events added to database: {rows_added_to_db}')
                 db_connection.commit() 
             # Perform regular cleanup
             if rows_added_to_db % 1000 == 0:
@@ -85,14 +86,32 @@ def save_event_to_db(db_connection: sqlite3.Connection, db_table_name: str, even
         None
     """
     cursor = db_connection.cursor()
+    data = json.loads(event)
 
     # Convert event dict to string for the database
-    event_timestamp = json.loads(event)['meta']['dt'] # Already in ISO-8601 format
+    event_timestamp = data.get('meta', {}).get('dt')
+    title           = data.get('title')
+    title_url       = data.get('title_url')
+    bot             = data.get('bot')
+    username        = data.get('user')
+    # Use .get() with a default of 0 to prevent KeyError
+    length_data = data.get('length', {})
+    length_old  = length_data.get('old', 0) # Returns 0 if 'old' doesn't exist
+    length_new  = length_data.get('new', 0) # Returns 0 if 'new' doesn't exist
 
-    sql = f'INSERT INTO {db_table_name} (raw_json, event_timestamp) VALUES (?,?)'
+    sql = f'''INSERT INTO {db_table_name} (
+        raw_json,
+        event_timestamp,
+        title,
+        title_url,
+        bot,
+        username,
+        length_bytes_old,
+        length_bytes_new
+        ) VALUES (?,?,?,?,?,?,?,?)'''
 
     try:
-        cursor.execute(sql, (event, event_timestamp)) # Data must be in a tuple, even if it's just one value
+        cursor.execute(sql, (event, event_timestamp, title, title_url, bot, username, length_old, length_new)) # Data must be in a tuple, even if it's just one value
         return True # Signal a successful save
     except sqlite3.Error as e:
         print(f'Unable to save event to database: {type(e).__name__}: {e}')
@@ -129,7 +148,13 @@ def database_init(db_name: str, db_table_name: str):
     cursor.execute(f'''CREATE TABLE IF NOT EXISTS {db_table_name} (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         raw_json TEXT,
-        event_timestamp DATETIME
+        event_timestamp DATETIME,
+        title TEXT,
+        title_url TEXT,
+        bot BOOLEAN,
+        username TEXT,
+        length_bytes_old INTEGER,
+        length_bytes_new INTEGER
     )''')
 
     connection.commit()
