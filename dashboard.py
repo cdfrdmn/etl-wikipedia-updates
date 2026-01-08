@@ -1,48 +1,86 @@
 import streamlit as st
-import pandas as pd
+import altair as alt
 import sqlite3
-import datetime
+import pandas as pd
 import time
 
 from config import load_user_config
 
+def get_pulse_data(db_path: str, db_table_name: str, time_period_minutes: int, time_granularity_seconds: int):
+    """Fetches edit counts bucketed by second for the last 5 minutes."""
+    conn = sqlite3.connect(db_path)
+    
+    # Query logic: 
+    # 1. Filter row to all in time period
+    # 2. Group by granularity in event_timestamp to create a time-series
+    # Return two columns: a time bin start, and the number of events within that bin
+    query = f'''
+        SELECT 
+            datetime((unixepoch(event_timestamp) / {time_granularity_seconds}) * {time_granularity_seconds}, 'unixepoch') as time, 
+            COUNT(*) as edit_count
+        FROM {db_table_name} 
+        WHERE event_timestamp > datetime('now', '-{time_period_minutes} minutes')
+        GROUP BY time 
+        ORDER BY time ASC
+    '''
+    # Cast this SQL table into a dataframe
+    df = pd.read_sql(query, conn)
+    # df['time'] = pd.to_datetime(df['time'])
+    print(df)
+    conn.close()
+    return df
+
+def get_leaderboard_data(db_path: str, db_table_name: str):
+    conn = sqlite3.connect(db_path)
+    # Filter for last 5 mins, group by title, sort by most edits
+    query = f'''
+        SELECT 
+            title, 
+            COUNT(*) as edit_count
+        FROM {db_table_name}
+        WHERE event_timestamp >= datetime('now', '-5 minutes')
+        GROUP BY title
+        ORDER BY edit_count DESC
+        LIMIT 10
+    '''
+    df = pd.read_sql(query, conn)
+    conn.close()
+    return df
+
 def main():
 
+    # Load the config
     config = load_user_config()
 
+    # Set the browser tab title
+    st.set_page_config(page_title='Wiki Live Monitor')
+    # Page title
     st.title('Live Wikipedia Edit Monitor')
+    # H2 header
+    pulse_period_minuntes: int = 5
+    st.header(f'Pulse (Last {pulse_period_minuntes} Minutes)')
 
-    # 1. Initialize 'initial_max_id' only once
-    if 'initial_max_id' not in st.session_state:
-        conn = sqlite3.connect(config.db_path)
-        # Get the highest ID currently in the table
-        res = conn.execute(f"SELECT MAX(id) FROM {config.db_table_name}").fetchone()
-        # If DB is empty, start at 0
-        st.session_state.initial_max_id = res[0] if res[0] is not None else 0
-        st.session_state.start_time = datetime.datetime.now().strftime("%H:%M:%S")
-        conn.close()
-
-    metric_placeholder = st.empty()
+    # Create a persistent placeholder for the chart, otherwise each refresh would append a new chart underneath
+    chart_placeholder = st.empty()
 
     while True:
-        conn = sqlite3.connect(config.db_path)
-        # Get current total count AND the new max ID
-        res = conn.execute(f"SELECT COUNT(*), MAX(id) FROM {config.db_table_name}").fetchone()
-        conn.close()
-        
-        current_count = res[0] if res[0] else 0
-        current_max_id = res[1] if res[1] else 0
-        
-        # 2. Calculate added rows based on ID growth, not row count
-        added_since_start = max(0, current_max_id - st.session_state.initial_max_id)
-        
-        metric_placeholder.metric(
-            label=f"New Edits (Since page load {st.session_state.start_time})", 
-            value=f"{added_since_start:,}",
-            # delta=f"{current_count:,} currently in DB"
-        )
-        
-        time.sleep(1)
+        # Get the data
+        df = get_pulse_data(db_path=config.db_path, db_table_name=config.db_table_name, time_period_minutes=pulse_period_minuntes, time_granularity_seconds=5)
+
+        # Update the chart
+        if not df.empty:
+            chart_placeholder.area_chart(
+                df.set_index('time'),
+                x_label='Time (UTC)',
+                y_label='Total Edits',
+                width='stretch' # stretch to fill placeholder
+            )
+        else:
+            # If the data is empty, don't show a chart
+            chart_placeholder.info("Waiting for data...")
+
+        # Time to wait between refreshing (>= database time commit interval)
+        time.sleep(5)
 
 if __name__ == "__main__":
     main()
