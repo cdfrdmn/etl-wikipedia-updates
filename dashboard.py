@@ -1,5 +1,4 @@
 import streamlit as st
-import altair as alt
 import sqlite3
 import pandas as pd
 import time
@@ -30,23 +29,6 @@ def get_pulse_data(db_path: str, db_table_name: str, time_period_minutes: int, t
     conn.close()
     return df
 
-def get_leaderboard_data(db_path: str, db_table_name: str):
-    conn = sqlite3.connect(db_path)
-    # Filter for last 5 mins, group by title, sort by most edits
-    query = f'''
-        SELECT 
-            title, 
-            COUNT(*) as edit_count
-        FROM {db_table_name}
-        WHERE event_timestamp >= datetime('now', '-5 minutes')
-        GROUP BY title
-        ORDER BY edit_count DESC
-        LIMIT 10
-    '''
-    df = pd.read_sql(query, conn)
-    conn.close()
-    return df
-
 def main():
 
     # Load the config
@@ -65,7 +47,7 @@ def main():
 
     while True:
         # Get the data
-        df = get_pulse_data(db_path=config.db_path, db_table_name=config.db_table_name, time_period_minutes=pulse_period_minuntes, time_granularity_seconds=5)
+        df = get_pulse_data(db_path=config.db_path, db_table_name=config.db_table_name, time_period_minutes=pulse_period_minuntes, time_granularity_seconds=1)
 
         # Update the chart
         if not df.empty:
