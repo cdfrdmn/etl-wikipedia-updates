@@ -21,29 +21,42 @@ def pipeline(db_connection: sqlite3.Connection, db_table_name: str, stream_url: 
     rows_added_to_db = 0
     last_commit_time = time.time()
     commit_interval_seconds = 2
+    while True:
+        try:
+            # Iterate over each yielded event
+            for event in sse_event_generator(stream_url, user_agent):
+                # Call the save function and check if it was successful
+                if db_insert_event(db_connection, db_table_name, event):
+                    rows_added_to_db+=1
 
-    # Iterate over each yielded event
-    for event in sse_event_generator(stream_url, user_agent):
-        # Call the save function and check if it was successful
-        if db_insert_event(db_connection, db_table_name, event):
-            rows_added_to_db+=1
+                    # Use a time-based commit schedule to limit database write calls
+                    if time.time() - last_commit_time >= commit_interval_seconds:
+                        db_connection.commit()
+                        last_commit_time = time.time()
+                        print(f'Events committed to database: {rows_added_to_db}')
+                        current_row_count: int = db_connection.execute(f"SELECT COUNT(*) FROM {db_table_name}").fetchone()[0]
 
-            # Use a time-based commit schedule to limit database write calls
-            if time.time() - last_commit_time >= commit_interval_seconds:
-                db_connection.commit()
-                last_commit_time = time.time()
-                print(f'Events committed to database: {rows_added_to_db}')
-                current_row_count: int = db_connection.execute(f"SELECT COUNT(*) FROM {db_table_name}").fetchone()[0]
+                        # Perform threshold based database cleanup, allowing a 10% buffer 
+                        if current_row_count >= int(1.1*db_max_events):
+                            db_connection.execute(f'''
+                                DELETE FROM {db_table_name} 
+                                WHERE id < MAX(0, (SELECT MAX(id) FROM {db_table_name}) - {db_max_events})
+                            ''')
+                            db_connection.commit()
+                            current_row_count = db_max_events
+                            print("--- CLEANUP PERFORMED ---")
 
-                # Perform threshold based database cleanup, allowing a 10% buffer 
-                if current_row_count >= int(1.1*db_max_events):
-                    db_connection.execute(f'''
-                        DELETE FROM {db_table_name} 
-                        WHERE id < MAX(0, (SELECT MAX(id) FROM {db_table_name}) - {db_max_events})
-                    ''')
-                    db_connection.commit()
-                    current_row_count = db_max_events
-                    print("--- CLEANUP PERFORMED ---")
+        except (requests.exceptions.ChunkedEncodingError, 
+                requests.exceptions.ConnectionError) as e:
+            print(f"Stream interrupted: {e}")
+            print("Retrying in 5 seconds...")
+            time.sleep(5)
+            continue  # This goes back to the 'while True' and restarts the generator
+        
+        except Exception as e:
+            # For unexpected errors (like logic bugs), you might want to stop
+            print(f"Unexpected error: {e}")
+            break
 
 def sse_event_generator(url: str, user_agent: str) -> Generator[dict[str, Any], None, None]:
     """Establish a connection to a HTTP SSE stream server and generate (yield) incoming messages one-by-one. 
