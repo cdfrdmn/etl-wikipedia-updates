@@ -4,7 +4,7 @@ import json
 import time
 from config import load_user_config
 
-def pipeline(db_connection: sqlite3.Connection, db_table_name: str, stream_url: str, user_agent: str, batch_size: int, db_max_events: int) -> None:
+def pipeline(db_connection: sqlite3.Connection, db_table_name: str, stream_url: str, user_agent: str, db_max_events: int) -> None:
     """Orchestrate the end-end pipeline for real-time SSE message ingestion into an SQLite database. 
 
     Args:
@@ -12,7 +12,6 @@ def pipeline(db_connection: sqlite3.Connection, db_table_name: str, stream_url: 
         db_table_name (str): Name of the target database table.
         stream_url (str): SSE endpoint URL.
         user_agent (str): Identity string for the stream request header.
-        batch_size (int): The number of rows to be added to the database before committing changes.
 
     Returns:
         int: Number of rows added to the database table since execution start.
@@ -208,7 +207,6 @@ def main():
             db_table_name=config.db_table_name,
             stream_url=config.stream_url,
             user_agent=config.user_agent,
-            batch_size=config.db_batch_size,
             db_max_events=config.db_max_events
         )
     except KeyboardInterrupt:

@@ -9,12 +9,6 @@
 # reach out if your bot causes technical issues rather than just banning your IP.
 user-agent: "ETLWiki-Bot (contact: your@email.com)"
 
-# PERFORMANCE SETTINGS
-# db-batch-size: How many records to process in a single database transaction.
-# - Higher values: Faster total processing time but uses more memory.
-# - Lower values: Safer for low-memory systems or unstable connections.
-db-batch-size: 50
-
 # STORAGE MANAGEMENT
 # db-max-events: The maximum number of records allowed in the local database.
 # Once this limit is reached, the bot will rotate data to prevent your disk
