@@ -1,7 +1,9 @@
-from sseclient import SSEClient
+import requests
+import sseclient
 import sqlite3
 import json
 import time
+from typing import cast, Iterator, Generator, Any
 from config import load_user_config
 
 def pipeline(db_connection: sqlite3.Connection, db_table_name: str, stream_url: str, user_agent: str, db_max_events: int) -> None:
@@ -16,17 +18,14 @@ def pipeline(db_connection: sqlite3.Connection, db_table_name: str, stream_url: 
     Returns:
         int: Number of rows added to the database table since execution start.
     """
-    # Instantiate the iterator
-    event_feed = sse_stream_iterator(stream_url, user_agent)
-
     rows_added_to_db = 0
     last_commit_time = time.time()
     commit_interval_seconds = 2
 
-    # Iterate over each yielded message
-    for event in event_feed:
+    # Iterate over each yielded event
+    for event in sse_event_generator(stream_url, user_agent):
         # Call the save function and check if it was successful
-        if save_event_to_db(db_connection, db_table_name, event):
+        if db_insert_event(db_connection, db_table_name, event):
             rows_added_to_db+=1
 
             # Use a time-based commit schedule to limit database write calls
@@ -46,7 +45,7 @@ def pipeline(db_connection: sqlite3.Connection, db_table_name: str, stream_url: 
                     current_row_count = db_max_events
                     print("--- CLEANUP PERFORMED ---")
 
-def sse_stream_iterator(url: str, user_agent: str):
+def sse_event_generator(url: str, user_agent: str) -> Generator[dict[str, Any], None, None]:
     """Establish a connection to a HTTP SSE stream server and generate (yield) incoming messages one-by-one. 
 
     Args:
@@ -57,18 +56,24 @@ def sse_stream_iterator(url: str, user_agent: str):
         dict: The parsed (JSON) event message.
     """
 
-    # Request the stream with the required headers
-    request_headers = {'User-Agent': user_agent}
-    stream_events = SSEClient(url, headers=request_headers)
+    # Set headers to request rhe server keeps the connection open and sends a stream of events
+    request_headers: dict[str, str] = {'User-Agent': user_agent, 'Accept': 'text/event-stream'}
+    # Create the raw byte stream object
+    response = requests.get(url, stream=True, headers=request_headers)
+    print('Stream request sent')
+    print(f'Response: {response.status_code}')
+    # Parse the raw bytestream according to the SSE protocol. Use cast() to tell Pylance to treat the reponse object as an iterator
+    client = sseclient.SSEClient(cast(Iterator[bytes], response))
 
-    # Iterate over each yielded event
-    for raw_message in stream_events:
-        # Filter events to type 'message' which contain 'data'
-        if raw_message.event == 'message' and raw_message.data:
+    # Iterate over each parsed event object [sseclient.Event] when available
+    for event in client.events():
+        # Filter events to type 'message' which contain data
+        if event.event == 'message' and event.data:
             try:
-                # Filter the data which contains properties:type: 'edit' or 'new' and not 'log'
-                data = json.loads(raw_message.data)
-                if data['type'] == 'edit' or data['type'] == 'new':
+                # Cast raw message into a dict of JSON
+                data = json.loads(event.data)
+                # Filter eventa to only types 'edit' or 'new'
+                if data.get('type') in ('edit', 'new'):
                     # Yield the data of the oldest filtered event in the stream buffer as a JSON dict
                     yield(data)
             # Catch malformed JSON
@@ -80,9 +85,10 @@ def sse_stream_iterator(url: str, user_agent: str):
                 print(f"Skipping event: {type(e).__name__}: {e}")
                 continue
 
-def transform_data(data: dict):
+def transform_data(data: dict[str, Any]) -> dict[str, Any]: # JSON dictionary has a mix of strings, integers, and nested objects
 
     raw_dt              = str(data.get('meta', {}).get('dt'))
+    # Remove 'T' and 'Z' to make it SQLite compatible: "2026-01-08 22:35:51"
     clean_dt            = str(raw_dt.replace('T', ' ').replace('Z', ''))
     title_clean         = str(data.get('title'))
     title_url_clean     = str(data.get('title_url'))
@@ -95,7 +101,7 @@ def transform_data(data: dict):
     length_new  = int(length_data.get('new', 0)) # Returns 0 if 'new' doesn't exist
     length_diff_bytes   = int(length_old - length_new)
 
-    clean_data = {
+    clean_data: dict[str, Any] = {
         'event_timestamp': clean_dt,
         'title': title_clean,
         'title_url': title_url_clean,
@@ -108,7 +114,7 @@ def transform_data(data: dict):
 
     return clean_data
 
-def save_event_to_db(db_connection: sqlite3.Connection, db_table_name: str, event: dict) -> bool:
+def db_insert_event(db_connection: sqlite3.Connection, db_table_name: str, event: dict[str, Any]) -> bool:
     """Insert a new record into the specified database table.
 
     Args:
@@ -121,7 +127,7 @@ def save_event_to_db(db_connection: sqlite3.Connection, db_table_name: str, even
     """
     cursor = db_connection.cursor()
 
-    clean_data: dict = transform_data(event)
+    clean_data = transform_data(event)
 
     sql = f'''INSERT INTO {db_table_name} (
         raw_json,
