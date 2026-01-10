@@ -7,16 +7,17 @@ from typing import cast, Iterator, Generator, Any
 from config import load_user_config
 
 def pipeline(db_connection: sqlite3.Connection, db_table_name: str, stream_url: str, user_agent: str, db_max_events: int) -> None:
-    """Orchestrate the end-end pipeline for real-time SSE message ingestion into an SQLite database. 
+    """ Manage the connection with the SSE server and trigger the insertion of received data into the database.
 
     Args:
         db_connection (sqlite3.Connection): An active SQLite3 database connection object.
         db_table_name (str): Name of the target database table.
         stream_url (str): SSE endpoint URL.
         user_agent (str): Identity string for the stream request header.
-
+        db_max_events (int): Maximum number of rows in the database.
+    
     Returns:
-        int: Number of rows added to the database table since execution start.
+        None
     """
     rows_added_to_db = 0
     last_commit_time = time.time()
@@ -54,16 +55,15 @@ def pipeline(db_connection: sqlite3.Connection, db_table_name: str, stream_url: 
             continue
 
 def sse_event_generator(url: str, user_agent: str) -> Generator[dict[str, Any], None, None]:
-    """Establish a connection to a HTTP SSE stream server and generate (yield) incoming messages one-by-one. 
+    """Establish a connection to a HTTP SSE stream server and generate (yield) incoming events one-by-one. 
 
     Args:
         url (str): The SSE endpoint URL.
         user_agent (str): The identity string for the stream request header.
     
     Yields:
-        dict: The parsed (JSON) event message.
+        dict[str, Any]: The parsed event message in JSON.
     """
-
     # Set headers to request rhe server keeps the connection open and sends a stream of events
     request_headers: dict[str, str] = {'User-Agent': user_agent, 'Accept': 'text/event-stream'}
     # Create the raw byte stream object
@@ -94,27 +94,27 @@ def sse_event_generator(url: str, user_agent: str) -> Generator[dict[str, Any], 
                 continue
 
 def transform_data(data: dict[str, Any]) -> dict[str, Any]: # JSON dictionary has a mix of strings, integers, and nested objects
+    """Accept a dictionary of JSON data, and output a normalized/cleaned version.
 
+    Args:
+        data (dict[str, Any]): Data to be cleaned.
+
+    Returns:
+        dict[str, Any]: Cleaned data.
+    """
     raw_dt              = str(data.get('meta', {}).get('dt'))
-    # Remove 'T' and 'Z' to make it SQLite compatible: "2026-01-08 22:35:51"
-    clean_dt            = str(raw_dt.replace('T', ' ').replace('Z', ''))
-    title_clean         = str(data.get('title'))
-    title_url_clean     = str(data.get('title_url'))
-    bot_clean           = int(data.get('bot'))
-    username_clean      = str(data.get('user'))
-
-    # Use .get() with a default of 0 to prevent KeyError
-    length_data = data.get('length', {})
-    length_old  = int(length_data.get('old', 0)) # Returns 0 if 'old' doesn't exist
-    length_new  = int(length_data.get('new', 0)) # Returns 0 if 'new' doesn't exist
+    length_data         = data.get('length', {})
+    length_old          =  int(length_data.get('old', 0)) # Returns 0 if 'old' doesn't exist
+    length_new          =  int(length_data.get('new', 0)) # Returns 0 if 'new' doesn't exist
     length_diff_bytes   = int(length_old - length_new)
 
+    # Set default values where possible to prevent KeyError
     clean_data: dict[str, Any] = {
-        'event_timestamp': clean_dt,
-        'title': title_clean,
-        'title_url': title_url_clean,
-        'bot': bot_clean,
-        'username': username_clean,
+        'event_timestamp':  str(raw_dt.replace('T', ' ').replace('Z', '')), # Remove 'T' and 'Z' to make it SQLite compatible, e.g. "2026-01-08 22:35:51"
+        'title':            str(data.get('title')),
+        'title_url':        str(data.get('title_url')),
+        'bot':              int(data.get('bot')),
+        'username':         str(data.get('user')),
         'length_bytes_old': length_old,
         'length_bytes_new': length_new,
         'length_diff_bytes': length_diff_bytes
@@ -123,15 +123,15 @@ def transform_data(data: dict[str, Any]) -> dict[str, Any]: # JSON dictionary ha
     return clean_data
 
 def db_insert_event(db_connection: sqlite3.Connection, db_table_name: str, event: dict[str, Any]) -> bool:
-    """Insert a new record into the specified database table.
+    """Accepts an event, transforms the data and inserts it into the database.
 
     Args:
         db_connection (sqlite3.Connection): An active SQLite3 database connection object.
         db_table_name (str): Name of the target database table.
-        event (dict): The event data.
+        event (dict[str, Any]): The event data.
 
     Returns:
-        None
+        bool: The status of the insertion. Successful=True, Unsuccessful=False.
     """
     cursor = db_connection.cursor()
 
@@ -145,8 +145,9 @@ def db_insert_event(db_connection: sqlite3.Connection, db_table_name: str, event
         bot,
         username,
         length_bytes_old,
-        length_bytes_new
-        ) VALUES (?,?,?,?,?,?,?,?)'''
+        length_bytes_new,
+        length_diff_bytes
+        ) VALUES (?,?,?,?,?,?,?,?,?)'''
 
     try:
         cursor.execute(sql, (json.dumps(event),
@@ -156,8 +157,11 @@ def db_insert_event(db_connection: sqlite3.Connection, db_table_name: str, event
                              clean_data.get('bot'),
                              clean_data.get('username'),
                              clean_data.get('length_bytes_old'),
-                             clean_data.get('length_bytes_new'))) # Data must be in a tuple, even if it's just one value
-        return True # Signal a successful save
+                             clean_data.get('length_bytes_new'),
+                             clean_data.get('length_diff_bytes')
+                            )
+        ) # Data must be in a tuple, even if it's just one value
+        return True
     except sqlite3.Error as e:
         print(f'Unable to save event to database: {type(e).__name__}: {e}')
         return False # Signal an unsuccessful/skipped save
@@ -171,7 +175,6 @@ def database_init(db_name: str, db_table_name: str):
     Args:
         db_name (str): The name of the target database file (e.g. 'data.db').
         db_table_name (str): The name of the target database table.
-        db_max_rows (int): Maximum number of rows the database shall store in a rolling fashion.
 
     Returns:
         sqlite3.Connection: An active SQLite3 database connection object.
@@ -179,11 +182,9 @@ def database_init(db_name: str, db_table_name: str):
     Raises:
         sqlite3.Error: If the database cannot be initialized or the table creation fails.
     """
-
     # Create a database file if it doesn't exist and connect to it
     connection = sqlite3.connect(db_name)
-    # Configure the database to enable Write-Ahead Logging (allows multiple readers and
-    #   one writer to work simultaneously)
+    # Allow one writer and multiple readers to access the db simultaneously
     connection.execute('PRAGMA journal_mode=WAL;')
     # The cursor object is python's interface to the databse manager (SQLite)
     cursor = connection.cursor()
@@ -199,19 +200,16 @@ def database_init(db_name: str, db_table_name: str):
         bot BOOLEAN,
         username TEXT,
         length_bytes_old INTEGER,
-        length_bytes_new INTEGER
-    )''')
-
+        length_bytes_new INTEGER,
+        length_diff_bytes INTEGER
+        )'''
+    )
     connection.commit()
 
     return connection
 
 def main():
-    """Execute the SSE ingestion.
-
-    Loads the environment configuration and manages the lifecycle of the 
-    database connection while the pipeline processes real-time messages.
-    """
+    """Load the application configuration and start the ETL pipeline."""
     config = load_user_config()
     db_connection = database_init(config.db_path, config.db_table_name)
 
