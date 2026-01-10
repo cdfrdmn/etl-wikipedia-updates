@@ -45,18 +45,13 @@ def pipeline(db_connection: sqlite3.Connection, db_table_name: str, stream_url: 
                             db_connection.commit()
                             current_row_count = db_max_events
                             print("--- CLEANUP PERFORMED ---")
-
-        except (requests.exceptions.ChunkedEncodingError, 
-                requests.exceptions.ConnectionError) as e:
-            print(f"Stream interrupted: {e}")
-            print("Retrying in 5 seconds...")
+        # Handle stream interruptions due to connection timeout or corrupted chunks
+        except (requests.exceptions.Timeout,
+                requests.exceptions.ConnectionError,
+                requests.exceptions.ChunkedEncodingError) as e:
+            print(f'Stream interrupted: {e}\nRetying in 5 seconds')
             time.sleep(5)
-            continue  # This goes back to the 'while True' and restarts the generator
-        
-        except Exception as e:
-            # For unexpected errors (like logic bugs), you might want to stop
-            print(f"Unexpected error: {e}")
-            break
+            continue
 
 def sse_event_generator(url: str, user_agent: str) -> Generator[dict[str, Any], None, None]:
     """Establish a connection to a HTTP SSE stream server and generate (yield) incoming messages one-by-one. 
