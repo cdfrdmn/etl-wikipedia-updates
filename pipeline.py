@@ -3,10 +3,12 @@ import sseclient
 import sqlite3
 import json
 import time
+import os
+import sys
 from typing import cast, Iterator, Generator, Any
 from config import load_user_config
 
-def pipeline(db_connection: sqlite3.Connection, db_table_name: str, stream_url: str, user_agent: str, db_max_events: int) -> None:
+def pipeline(db_connection: sqlite3.Connection, db_table_name: str, stream_url: str, user_agent: str, db_max_events: int, db_last_timestamp: str) -> None:
     """ Manage the connection with the SSE server and trigger the insertion of received data into the database.
 
     Args:
@@ -15,6 +17,7 @@ def pipeline(db_connection: sqlite3.Connection, db_table_name: str, stream_url: 
         stream_url (str): SSE endpoint URL.
         user_agent (str): Identity string for the stream request header.
         db_max_events (int): Maximum number of rows in the database.
+        db_last_timestamp (str): The timestamp of the most recent event in the database.
     
     Returns:
         None
@@ -25,7 +28,7 @@ def pipeline(db_connection: sqlite3.Connection, db_table_name: str, stream_url: 
     while True:
         try:
             # Iterate over each yielded event
-            for event in sse_event_generator(stream_url, user_agent):
+            for event in sse_event_generator(stream_url, user_agent, since=db_last_timestamp):
                 # Call the save function and check if it was successful
                 if db_insert_event(db_connection, db_table_name, event):
                     rows_added_to_db+=1
@@ -54,18 +57,23 @@ def pipeline(db_connection: sqlite3.Connection, db_table_name: str, stream_url: 
             time.sleep(5)
             continue
 
-def sse_event_generator(url: str, user_agent: str) -> Generator[dict[str, Any], None, None]:
+def sse_event_generator(url: str, user_agent: str, since: str | None) -> Generator[dict[str, Any], None, None]:
     """Establish a connection to a HTTP SSE stream server and generate (yield) incoming events one-by-one. 
 
     Args:
         url (str): The SSE endpoint URL.
         user_agent (str): The identity string for the stream request header.
+        since (str): ISO8601 timestamp.
     
     Yields:
         dict[str, Any]: The parsed event message in JSON.
     """
     # Set headers to request rhe server keeps the connection open and sends a stream of events
     request_headers: dict[str, str] = {'User-Agent': user_agent, 'Accept': 'text/event-stream'}
+    # If the database is not empty, continue the stream from the last event in the database
+    if since:
+        url = f'{url}?since={since}'
+        print(f'Requesting events since: {since}')
     # Create the raw byte stream object
     response = requests.get(url, stream=True, headers=request_headers)
     print('Stream request sent')
@@ -102,7 +110,6 @@ def transform_data(data: dict[str, Any]) -> dict[str, Any]: # JSON dictionary ha
     Returns:
         dict[str, Any]: Cleaned data.
     """
-    raw_dt              = str(data.get('meta', {}).get('dt'))
     length_data         = data.get('length', {})
     length_old          =  int(length_data.get('old', 0)) # Returns 0 if 'old' doesn't exist
     length_new          =  int(length_data.get('new', 0)) # Returns 0 if 'new' doesn't exist
@@ -110,7 +117,8 @@ def transform_data(data: dict[str, Any]) -> dict[str, Any]: # JSON dictionary ha
 
     # Set default values where possible to prevent KeyError
     clean_data: dict[str, Any] = {
-        'event_timestamp':  str(raw_dt.replace('T', ' ').replace('Z', '')), # Remove 'T' and 'Z' to make it SQLite compatible, e.g. "2026-01-08 22:35:51"
+        # 'event_timestamp':  str(raw_dt.replace('T', ' ').replace('Z', '')), # Remove 'T' and 'Z' to make it SQLite compatible, e.g. "2026-01-08 22:35:51"
+        'event_timestamp':  str(data.get('meta', {}).get('dt')),
         'title':            str(data.get('title')),
         'title_url':        str(data.get('title_url')),
         'bot':              int(data.get('bot')),
@@ -161,13 +169,16 @@ def db_insert_event(db_connection: sqlite3.Connection, db_table_name: str, event
                              clean_data.get('length_diff_bytes')
                             )
         ) # Data must be in a tuple, even if it's just one value
+        print(clean_data.get('event_timestamp'))
         return True
+    except sqlite3.IntegrityError as e:
+        print(f'Skipping event insertion: {e}')
     except sqlite3.Error as e:
         print(f'Unable to save event to database: {type(e).__name__}: {e}')
         return False # Signal an unsuccessful/skipped save
 
 def database_init(db_name: str, db_table_name: str):
-    """Initialise an SQLite3 database and return the database connection object.
+    """Initialise an SQLite3 database and return the database connection object, and the desired event start time.
 
     If the database file doesn't exist, create it. If a table with the configured
     name doesn't exist, create it.
@@ -191,6 +202,7 @@ def database_init(db_name: str, db_table_name: str):
     print('Database connection established.')
 
     # Create a table
+    # Prevent duplicate events by constraining rows to have unique timestamp, username and title combinations.
     cursor.execute(f'''CREATE TABLE IF NOT EXISTS {db_table_name} (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         raw_json TEXT,
@@ -201,17 +213,30 @@ def database_init(db_name: str, db_table_name: str):
         username TEXT,
         length_bytes_old INTEGER,
         length_bytes_new INTEGER,
-        length_diff_bytes INTEGER
+        length_diff_bytes INTEGER,
+        UNIQUE(event_timestamp, username, title)
         )'''
     )
     connection.commit()
+    # Import a user-specified events start time
+    since_override = os.getenv('SINCE_OVERRIDE')
 
-    return connection
+    # Get the timestamp of the most recent event
+    cursor.execute(f"SELECT MAX(event_timestamp) FROM {db_table_name}")
+    db_last_timestamp = cursor.fetchone()[0]
+    print(f'Last event timestamp in DB: {db_last_timestamp}')
+
+    if db_last_timestamp and since_override:
+        print('ERROR: Environment variable SINCE_OVERRIDE is set, but database already has data.')
+        print('Action required: Unset the variable or clear the database to proceed.')
+        sys.exit(1)
+
+    return connection, db_last_timestamp or since_override
 
 def main():
     """Load the application configuration and start the ETL pipeline."""
     config = load_user_config()
-    db_connection = database_init(config.db_path, config.db_table_name)
+    db_connection, db_last_timestamp = database_init(config.db_path, config.db_table_name)
 
     try:
         pipeline(
@@ -219,7 +244,8 @@ def main():
             db_table_name=config.db_table_name,
             stream_url=config.stream_url,
             user_agent=config.user_agent,
-            db_max_events=config.db_max_events
+            db_max_events=config.db_max_events,
+            db_last_timestamp=db_last_timestamp
         )
     except KeyboardInterrupt:
         print('\nReceived stop signal from user.')

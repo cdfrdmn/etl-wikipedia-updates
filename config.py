@@ -3,6 +3,7 @@ from pydantic_settings import BaseSettings
 from pathlib import Path
 from pprint import pprint
 import yaml
+from datetime import datetime
 
 class Settings(BaseSettings):
     # This app is dedicated to one URL, so hardcode the default
@@ -17,6 +18,7 @@ class Settings(BaseSettings):
     # User config:
     user_agent: str = Field(default='WikiETL-Bot', alias='user-agent')
     db_max_events: int = Field(default=100000, alias='db-max-events')
+    events_since: str = Field(default='', alias='events-since')
 
 def load_user_config(config_path: Path | str = 'config.yaml') -> Settings:
     yaml_data = {}
