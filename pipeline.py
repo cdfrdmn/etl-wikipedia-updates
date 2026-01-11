@@ -113,7 +113,7 @@ def transform_data(data: dict[str, Any]) -> dict[str, Any]: # JSON dictionary ha
     length_data         = data.get('length', {})
     length_old          =  int(length_data.get('old', 0)) # Returns 0 if 'old' doesn't exist
     length_new          =  int(length_data.get('new', 0)) # Returns 0 if 'new' doesn't exist
-    length_diff_bytes   = int(length_old - length_new)
+    length_diff_bytes   = int(length_new - length_old)
 
     # Set default values where possible to prevent KeyError
     clean_data: dict[str, Any] = {
