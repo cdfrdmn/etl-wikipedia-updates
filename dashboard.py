@@ -1,68 +1,45 @@
 import streamlit as st
-import sqlite3
-import pandas as pd
-import time
-
+import sqlite3, time
 from config import load_user_config
 
-def get_pulse_data(db_path: str, db_table_name: str, time_period_minutes: int, time_granularity_seconds: int):
-    """Fetches edit counts bucketed by second for the last 5 minutes."""
-    conn = sqlite3.connect(db_path)
+config = load_user_config()
+
+conn = sqlite3.connect(config.db_path, check_same_thread=False)
+st.title("Data Pipeline Monitor: Wikipedia Recent Events")
+velocity_placeholder = st.empty()
+latency_placeholder = st.empty()
+
+# Initial state
+if 'last_state' not in st.session_state:
+    with sqlite3.connect(config.db_path) as conn:
+        start_id = conn.execute(f"SELECT MAX(id) FROM {config.db_table_name}").fetchone()[0] or 0
+    # (id, timestamp, last_velocity)
+    st.session_state.last_state = (start_id, time.time(), 0)
+
+while True:
+    with sqlite3.connect(config.db_path) as conn:
+        current_id = conn.execute(f"SELECT MAX(id) FROM {config.db_table_name}").fetchone()[0] or 0
+    current_time = time.time()
     
-    # Query logic: 
-    # 1. Filter row to all in time period
-    # 2. Group by granularity in event_timestamp to create a time-series
-    # Return two columns: a time bin start, and the number of events within that bin
-    query = f'''
-        SELECT 
-            datetime((unixepoch(event_timestamp) / {time_granularity_seconds}) * {time_granularity_seconds}, 'unixepoch') as time, 
-            COUNT(*) as edit_count
-        FROM {db_table_name} 
-        WHERE event_timestamp > datetime('now', '-{time_period_minutes} minutes')
-        GROUP BY time 
-        ORDER BY time ASC
-    '''
-    # Cast this SQL table into a dataframe
-    df = pd.read_sql(query, conn)
-    # df['time'] = pd.to_datetime(df['time'])
-    print(df)
-    conn.close()
-    return df
+    # Retrieve previous states
+    prev_id, prev_time, prev_velocity = st.session_state.last_state
 
-def main():
+    # Calculate current states
+    delta_events = current_id - prev_id
+    delta_time = current_time - prev_time
+    current_velocity = int((delta_events / delta_time) * 60) if delta_time > 0 else 0
+    delta_velocity = current_velocity - prev_velocity
 
-    # Load the config
-    config = load_user_config()
+    latest_event_ts = conn.execute(f"SELECT unixepoch(event_timestamp) FROM {config.db_table_name} ORDER BY id DESC LIMIT 1").fetchone()[0]
+    latency = time.time() - latest_event_ts
 
-    # Set the browser tab title
-    st.set_page_config(page_title='Wiki Live Monitor')
-    # Page title
-    st.title('Live Wikipedia Edit Monitor')
-    # H2 header
-    pulse_period_minuntes: int = 5
-    st.header(f'Pulse (Last {pulse_period_minuntes} Minutes)')
+    with velocity_placeholder.container():
+        st.metric(
+            label='Ingestion rate (Events / minute)',
+            value=current_velocity,
+            delta=f'{delta_velocity} EPM'
+        )
 
-    # Create a persistent placeholder for the chart, otherwise each refresh would append a new chart underneath
-    chart_placeholder = st.empty()
-
-    while True:
-        # Get the data
-        df = get_pulse_data(db_path=config.db_path, db_table_name=config.db_table_name, time_period_minutes=pulse_period_minuntes, time_granularity_seconds=1)
-
-        # Update the chart
-        if not df.empty:
-            chart_placeholder.area_chart(
-                df.set_index('time'),
-                x_label='Time (UTC)',
-                y_label='Total Edits',
-                width='stretch' # stretch to fill placeholder
-            )
-        else:
-            # If the data is empty, don't show a chart
-            chart_placeholder.info("Waiting for data...")
-
-        # Time to wait between refreshing (>= database time commit interval)
-        time.sleep(5)
-
-if __name__ == "__main__":
-    main()
+    # Save state & Wait
+    st.session_state.last_state = (current_id, current_time, current_velocity)
+    time.sleep(3)
