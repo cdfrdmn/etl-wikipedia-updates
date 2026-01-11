@@ -117,8 +117,7 @@ def transform_data(data: dict[str, Any]) -> dict[str, Any]: # JSON dictionary ha
 
     # Set default values where possible to prevent KeyError
     clean_data: dict[str, Any] = {
-        # 'event_timestamp':  str(raw_dt.replace('T', ' ').replace('Z', '')), # Remove 'T' and 'Z' to make it SQLite compatible, e.g. "2026-01-08 22:35:51"
-        'event_timestamp':  str(data.get('meta', {}).get('dt')),
+        'event_timestamp':  str(data.get('meta', {}).get('dt').replace('T', ' ').replace('Z', '')), # Remove 'T' and 'Z' to make it SQLite compatible, e.g. "2026-01-08 22:35:51"
         'title':            str(data.get('title')),
         'title_url':        str(data.get('title_url')),
         'bot':              int(data.get('bot')),
@@ -217,6 +216,8 @@ def database_init(db_name: str, db_table_name: str):
         UNIQUE(event_timestamp, username, title)
         )'''
     )
+    # Creating a high-performance index to allow the dashboard to query many rows quickly
+    cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_timestamp ON {db_table_name}(event_timestamp);")
     connection.commit()
     # Import a user-specified events start time
     since_override = os.getenv('SINCE_OVERRIDE')
