@@ -8,6 +8,8 @@ wheels/
 
 # Databases
 *.db
+*.db-shm
+*.db-wal
 
 # Virtual environments
 .venv
