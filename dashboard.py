@@ -51,14 +51,14 @@ while True:
 
     with velocity_placeholder.container():
         st.metric(
-            label='Ingestion rate (Events / minute)',
+            label='Ingestion Rate (Events / minute)',
             value=velocity,
             delta=f'{velocity - prev_velocity} EPM'
         )
 
     with total_rows_placeholder.container():
         st.metric(
-            label='Total rows in Database',
+            label='Total Events in Database',
             value=f'{current_total_rows}',
             delta=f'{current_total_rows - prev_total_rows}'
         )
@@ -67,7 +67,7 @@ while True:
         st.metric(
             label='Database Disk Usage',
             value=f'{db_disk_usage:.2f} MiB',
-            delta=f'{(db_disk_usage - prev_db_disk_size):.2f}'
+            delta=f'{(db_disk_usage - prev_db_disk_size):.2f} MiB'
         )
 
     # Save state & Wait
