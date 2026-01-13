@@ -25,3 +25,7 @@ wheels/
 
 # App config
 config.yaml
+
+# Prometheus (keep the bind-mount folder, but nothing inside it)
+data-prometheus/*
+!data-prometheus/.gitkeep

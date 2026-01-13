@@ -22,6 +22,18 @@ services:
     # --server.enableXsrfProtection false = prevent connection error due to cloudflare tunnel stripping headers required for XRSF protection
     command: uv run streamlit run dashboard.py --server.address=0.0.0.0 --server.port=8501 --server.enableCORS false --server.enableXsrfProtection false
     restart: always
+  
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yaml:/etc/prometheus/prometheus.yaml
+      - ./data-prometheus:/data
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yaml'
+      - '--storage.tsdb.path=/data'
+      - '--storage.tsdb.retention.time=7d'
 
   tunnel:
     image: cloudflare/cloudflared:latest

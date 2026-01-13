@@ -1,0 +1,5 @@
+# Test Prometheus by pulling data from itself
+scrape_configs:
+  - job_name: "prometheus"
+    static_configs:
+      - targets: ["prometheus:9090"] # We can use the docker service name here as the default docker internal network should be running
