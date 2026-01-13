@@ -5,6 +5,9 @@ from pprint import pprint
 import yaml
 from datetime import datetime
 
+current_dir = Path(__file__).parent.resolve()
+project_root = current_dir.parent
+
 class Settings(BaseSettings):
     # This app is dedicated to one URL, so hardcode the default
     stream_url: str = "https://stream.wikimedia.org/v2/stream/recentchange"
@@ -20,7 +23,7 @@ class Settings(BaseSettings):
     db_max_events: int = Field(default=100000, alias='db-max-events')
     events_since: str = Field(default='', alias='events-since')
 
-def load_user_config(config_path: Path | str = 'config.yaml') -> Settings:
+def load_user_config(config_path: Path | str = project_root / 'config.yaml') -> Settings:
     yaml_data = {}
     path = Path(config_path)
     

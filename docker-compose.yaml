@@ -5,7 +5,7 @@ services:
       - DB_PATH=/app/data/wikipedia-events.db
     volumes:
       - ./data:/app/data
-    command: uv run pipeline.py
+    command: uv run src/pipeline.py
 
   dashboard:
     build: .

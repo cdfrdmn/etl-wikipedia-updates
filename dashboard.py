@@ -1,7 +1,7 @@
 import streamlit as st
 import sqlite3, time
-import db_helper
-from config import load_user_config
+import src.db_helper as db_helper
+from src.config import load_user_config
 
 st.set_page_config(
     # Title and icon for the browser's tab bar:
